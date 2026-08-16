@@ -1,17 +1,19 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { app } from "../src/main.js";
 
 const root = join(import.meta.dirname, "..");
 const manifest = JSON.parse(readFileSync(join(root, "windforce.json"), "utf8"));
 
 describe("Windforce manifest", () => {
-  it("registers actions through the injected public SDK without a local dispatcher", () => {
+  it("derives the checked-in manifest through the public Application SDK", () => {
     const mainSource = readFileSync(join(root, "src", "main.ts"), "utf8");
-    expect(mainSource).toContain('from "windforce-client"');
-    expect(mainSource).toContain("createApp({ actions })");
+    expect(mainSource).toContain('from "@imprun/app-sdk"');
+    expect(mainSource).toContain("defineApp({");
     expect(mainSource).not.toContain("ctx.action");
     expect(existsSync(join(root, "src", "runtime.ts"))).toBe(false);
+    expect(manifest).toEqual(app.describe().manifest);
   });
 
   it("keeps Playwright available at runtime without adding it to Core's static bundle graph", () => {

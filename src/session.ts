@@ -1,4 +1,4 @@
-import type { WindforceContext } from "windforce-client";
+import type { WindforceContext } from "@imprun/app-sdk";
 import { z } from "zod";
 import { TISTORY_PROFILE_PATH, TISTORY_SESSION_PATH, TISTORY_SESSION_REFERENCE } from "./config.js";
 

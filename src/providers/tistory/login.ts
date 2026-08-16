@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { WindforceContext } from "@imprun/app-sdk";
 import type { BrowserContext, Page } from "playwright";
-import type { WindforceContext } from "windforce-client";
 import {
   TISTORY_CONNECTION_RESOURCE_TYPE,
   TISTORY_PROFILE_PATH,

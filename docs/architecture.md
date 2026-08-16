@@ -17,18 +17,19 @@ Status: current implementation snapshot, not a final architecture decision
 
 ## Windforce SDK boundary
 
-The App entry point is registered with Core's injected
-`windforce-client.createApp({ actions })` contract. Publication does not inspect
-`ctx.action` or implement its own action dispatcher, and it does not copy the
-private `@scraping/sdk` package.
+The App entry point is defined through the public `@imprun/app-sdk` package,
+pinned to an exact public Git commit. `defineAction` owns each handler's schema,
+placement, and runtime grants; `defineApp` provides the SDK-neutral `main(ctx)`
+entry point and deterministic manifest description. Publication does not
+inspect `ctx.action`, copy the private `@scraping/sdk` package, or depend on
+Core's private transport.
 
 Core issue `#236` completed the scoped App-owned Variable and Resource mutation
 contract used by `connection.login`. The target Cloud reports that contract as
 deployed; release qualification must still probe the actual target runtime.
-`src/windforce-client.d.ts` is a development-time ABI declaration because Core
-currently injects the executable module only during Release preparation. A
-distributable public author SDK is follow-up developer-experience work tracked
-by Core issue `#239`, not a runtime blocker for this App.
+`npm run manifest` materializes the canonical App-owned deployment artifact.
+The SDK is an ordinary App dependency and does not replace Core admission,
+runtime enforcement, Worker scheduling, or Release preparation.
 
 Core's TypeScript release preparation installs production dependencies and
 statically verifies the App entrypoint with Bun. `bunfig.toml` therefore uses a
