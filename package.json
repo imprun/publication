@@ -9,10 +9,12 @@
     "check": "npm run typecheck && npm run lint && npm test",
     "format": "biome format --write .",
     "lint": "biome check .",
+    "manifest": "npm run build && node dist/scripts/generate-manifest.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@imprun/app-sdk": "https://codeload.github.com/imprun/app-sdk/tar.gz/e0604c59d5261f720f3544dbbcd19b5f785070a7",
     "marked": "16.0.0",
     "playwright": "1.60.0",
     "sanitize-html": "2.17.7",

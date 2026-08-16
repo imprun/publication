@@ -1,4 +1,4 @@
-import type { WindforceContext } from "windforce-client";
+import type { WindforceContext } from "@imprun/app-sdk";
 import { z } from "zod";
 import { cookieHeaderForHost, type TistoryConnection, type TistorySession } from "../../session.js";
 import { normalizeTistoryHost, tistoryOrigin } from "./host.js";

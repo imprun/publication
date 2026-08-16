@@ -1,4 +1,4 @@
-import type { WindforceContext } from "windforce-client";
+import type { WindforceContext } from "@imprun/app-sdk";
 import type {
   DraftFields,
   PostDeleteInput,

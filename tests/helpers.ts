@@ -1,4 +1,4 @@
-import type { WindforceContext } from "windforce-client";
+import type { WindforceContext } from "@imprun/app-sdk";
 import type { TistoryConnection, TistorySession } from "../src/session.js";
 
 export function sampleSession(): TistorySession {

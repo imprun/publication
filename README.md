@@ -35,10 +35,11 @@ Core issue `#236` is complete and the target Cloud reports the contract as
 deployed. Release qualification still verifies the target runtime before any
 live login or Tistory mutation.
 
-Core injects the executable `windforce-client` module while preparing the App
-Release. `src/windforce-client.d.ts` is only a local compile-time declaration of
-that public contract; the repository does not vendor a second runtime SDK. A
-stable distributable author SDK remains tracked separately in Core issue `#239`.
+The App uses the public `@imprun/app-sdk` package pinned to an exact public Git
+commit. `defineAction` and `defineApp` keep handler dispatch, schemas, placement,
+and runtime grants in one typed definition; `npm run manifest` regenerates the
+canonical deployment manifest. Core still owns and enforces the runtime
+contract, and the SDK remains an opaque App dependency.
 
 Before publishing the App Release, register the workspace-owned ResourceType
 `publication.connection@1` using
@@ -51,6 +52,7 @@ visible browser display. Other actions do not require browser placement.
 
 ```text
 npm install
+npm run manifest
 npm run check
 npm run build
 ```
