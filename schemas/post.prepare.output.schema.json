@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "connectionId",
+    "title",
+    "categoryId",
+    "tags",
+    "markdownHash",
+    "renderedHtmlHash",
+    "draftHash",
+    "renderedHtml"
+  ],
+  "properties": {
+    "provider": { "const": "tistory" },
+    "connectionId": { "const": "default" },
+    "title": { "type": "string" },
+    "categoryId": { "type": "integer", "minimum": 0 },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "markdownHash": { "$ref": "#/$defs/hash" },
+    "renderedHtmlHash": { "$ref": "#/$defs/hash" },
+    "draftHash": { "$ref": "#/$defs/hash" },
+    "renderedHtml": { "type": "string" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

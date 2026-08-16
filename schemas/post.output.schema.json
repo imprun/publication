@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "connectionId",
+    "postId",
+    "entryUrl",
+    "visibility",
+    "representativeImageApplied"
+  ],
+  "properties": {
+    "provider": { "const": "tistory" },
+    "connectionId": { "const": "default" },
+    "postId": { "type": "string", "pattern": "^\\d+$" },
+    "entryUrl": { "type": "string", "format": "uri" },
+    "visibility": { "enum": ["private", "public"] },
+    "representativeImageApplied": { "type": "boolean" }
+  }
+}

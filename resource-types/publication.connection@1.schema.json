@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "publication.connection@1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "provider",
+    "connectionId",
+    "blogHost",
+    "publicUrl",
+    "manageUrl",
+    "capturedAt",
+    "sessionSecretRef"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "provider": { "const": "tistory" },
+    "connectionId": { "const": "default" },
+    "blogHost": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.tistory\\.com$"
+    },
+    "blogTitle": { "type": "string" },
+    "publicUrl": { "type": "string", "format": "uri" },
+    "manageUrl": { "type": "string", "format": "uri" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "sessionSecretRef": {
+      "const": "$var@app:connections/tistory/default/session"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "connectionId", "postId", "deleted"],
+  "properties": {
+    "provider": { "const": "tistory" },
+    "connectionId": { "const": "default" },
+    "postId": { "type": "string", "pattern": "^\\d+$" },
+    "deleted": { "const": true }
+  }
+}

@@ -1,0 +1,77 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const root = join(import.meta.dirname, "..");
+const manifest = JSON.parse(readFileSync(join(root, "windforce.json"), "utf8"));
+
+describe("Windforce manifest", () => {
+  it("registers actions through the injected public SDK without a local dispatcher", () => {
+    const mainSource = readFileSync(join(root, "src", "main.ts"), "utf8");
+    expect(mainSource).toContain('from "windforce-client"');
+    expect(mainSource).toContain("createApp({ actions })");
+    expect(mainSource).not.toContain("ctx.action");
+    expect(existsSync(join(root, "src", "runtime.ts"))).toBe(false);
+  });
+
+  it("keeps Playwright available at runtime without adding it to Core's static bundle graph", () => {
+    const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    const bunConfig = readFileSync(join(root, "bunfig.toml"), "utf8");
+    const loginSource = readFileSync(join(root, "src", "providers", "tistory", "login.ts"), "utf8");
+    expect(packageJson.dependencies.playwright).toBe("1.60.0");
+    expect(bunConfig).toContain('linker = "hoisted"');
+    expect(bunConfig).toContain("production = true");
+    expect(loginSource).toContain('import(["play", "wright"].join(""))');
+  });
+
+  it("grants session writes only to the browser login action", () => {
+    const login = manifest.actions["connection.login"];
+    expect(login.runsOn).toEqual(["browser"]);
+    expect(login.runtimeAccess.writeVariables).toEqual([
+      {
+        scope: "app",
+        path: "connections/tistory/default/session",
+        storage: "secret",
+      },
+    ]);
+    for (const [name, action] of Object.entries(manifest.actions)) {
+      if (name === "connection.login") continue;
+      expect((action as Record<string, unknown>).runtimeAccess).not.toMatchObject({
+        writeVariables: expect.anything(),
+        writeResources: expect.anything(),
+      });
+    }
+  });
+
+  it("declares the exact secret read closure wherever the connection Resource is read", () => {
+    for (const [name, action] of Object.entries(manifest.actions)) {
+      const access = (action as { runtimeAccess?: Record<string, unknown> }).runtimeAccess;
+      if (!access || name === "post.prepare") continue;
+      expect(access.variables).toContainEqual({
+        scope: "app",
+        path: "connections/tistory/default/session",
+      });
+      expect(access.resources).toContainEqual({
+        scope: "app",
+        path: "connections/tistory/default/profile",
+      });
+    }
+  });
+
+  it("marks credentials and raw media as write-only and leaks no session schema", () => {
+    const loginSchema = JSON.parse(
+      readFileSync(join(root, "schemas", "connection.login.input.schema.json"), "utf8"),
+    );
+    expect(loginSchema.properties.accountId.writeOnly).toBe(true);
+    expect(loginSchema.properties.password.writeOnly).toBe(true);
+
+    for (const filename of readdirSync(join(root, "schemas")).filter((name) =>
+      name.endsWith("output.schema.json"),
+    )) {
+      const text = readFileSync(join(root, "schemas", filename), "utf8").toLowerCase();
+      expect(text).not.toContain("cookie");
+      expect(text).not.toContain("password");
+      expect(text).not.toContain("storagestate");
+    }
+  });
+});

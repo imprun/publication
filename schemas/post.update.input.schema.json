@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["postId", "title", "markdown", "draftHash", "visibility"],
+  "properties": {
+    "provider": { "const": "tistory", "default": "tistory" },
+    "connectionId": { "const": "default", "default": "default" },
+    "postId": { "type": "string", "pattern": "^\\d+$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 250 },
+    "markdown": { "type": "string", "minLength": 1, "maxLength": 2000000 },
+    "tags": {
+      "type": "array",
+      "maxItems": 30,
+      "default": [],
+      "items": { "type": "string", "minLength": 1, "maxLength": 100 }
+    },
+    "categoryId": { "type": "integer", "minimum": 0, "default": 0 },
+    "draftHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "visibility": { "enum": ["private", "public"] },
+    "representativeImage": { "$ref": "#/$defs/media" }
+  },
+  "$defs": {
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "connectionId",
+        "filename",
+        "mimeType",
+        "size",
+        "width",
+        "height",
+        "attachmentRef",
+        "substitution"
+      ],
+      "properties": {
+        "provider": { "const": "tistory" },
+        "connectionId": { "const": "default" },
+        "filename": { "type": "string", "minLength": 1 },
+        "mimeType": {
+          "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"]
+        },
+        "size": { "type": "integer", "minimum": 1 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "attachmentRef": { "type": "string", "pattern": "^kage@" },
+        "substitution": { "type": "string", "pattern": "^\\[##_Image\\|" }
+      }
+    }
+  }
+}

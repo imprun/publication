@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["filename", "mimeType", "contentBase64"],
+  "properties": {
+    "provider": { "const": "tistory", "default": "tistory" },
+    "connectionId": { "const": "default", "default": "default" },
+    "filename": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "mimeType": {
+      "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"]
+    },
+    "contentBase64": {
+      "type": "string",
+      "minLength": 1,
+      "contentEncoding": "base64",
+      "writeOnly": true
+    }
+  }
+}

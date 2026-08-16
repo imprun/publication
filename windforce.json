@@ -1,0 +1,77 @@
+{
+  "app": "publication",
+  "entrypoint": "src/main.ts",
+  "scriptLang": "typescript",
+  "timeout": 900,
+  "actions": {
+    "connection.login": {
+      "inputSchema": "schemas/connection.login.input.schema.json",
+      "outputSchema": "schemas/connection.output.schema.json",
+      "runsOn": ["browser"],
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }],
+        "writeVariables": [
+          {
+            "scope": "app",
+            "path": "connections/tistory/default/session",
+            "storage": "secret"
+          }
+        ],
+        "writeResources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    },
+    "connection.status": {
+      "inputSchema": "schemas/connection.input.schema.json",
+      "outputSchema": "schemas/connection.output.schema.json",
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    },
+    "metadata.categories": {
+      "inputSchema": "schemas/connection.input.schema.json",
+      "outputSchema": "schemas/categories.output.schema.json",
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    },
+    "media.upload": {
+      "inputSchema": "schemas/media.upload.input.schema.json",
+      "outputSchema": "schemas/media.output.schema.json",
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    },
+    "post.prepare": {
+      "inputSchema": "schemas/post.prepare.input.schema.json",
+      "outputSchema": "schemas/post.prepare.output.schema.json"
+    },
+    "post.publish": {
+      "inputSchema": "schemas/post.publish.input.schema.json",
+      "outputSchema": "schemas/post.output.schema.json",
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    },
+    "post.update": {
+      "inputSchema": "schemas/post.update.input.schema.json",
+      "outputSchema": "schemas/post.output.schema.json",
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    },
+    "post.delete": {
+      "inputSchema": "schemas/post.delete.input.schema.json",
+      "outputSchema": "schemas/post.delete.output.schema.json",
+      "runtimeAccess": {
+        "variables": [{ "scope": "app", "path": "connections/tistory/default/session" }],
+        "resources": [{ "scope": "app", "path": "connections/tistory/default/profile" }]
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "markdown"],
+  "properties": {
+    "provider": { "const": "tistory", "default": "tistory" },
+    "connectionId": { "const": "default", "default": "default" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 250 },
+    "markdown": { "type": "string", "minLength": 1, "maxLength": 2000000 },
+    "tags": {
+      "type": "array",
+      "maxItems": 30,
+      "default": [],
+      "items": { "type": "string", "minLength": 1, "maxLength": 100 }
+    },
+    "categoryId": { "type": "integer", "minimum": 0, "default": 0 }
+  }
+}

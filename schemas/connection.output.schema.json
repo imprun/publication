@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "connectionId", "blogHost", "publicUrl", "authenticated"],
+  "properties": {
+    "provider": { "const": "tistory" },
+    "connectionId": { "const": "default" },
+    "blogHost": { "type": "string" },
+    "publicUrl": { "type": "string", "format": "uri" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "checkedAt": { "type": "string", "format": "date-time" },
+    "authenticated": { "const": true }
+  }
+}
