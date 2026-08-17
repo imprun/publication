@@ -7,6 +7,7 @@ import type {
   UploadedMedia,
 } from "../../contracts.js";
 import { uploadedMediaSchema } from "../../contracts.js";
+import { waitForHumanDecision } from "../../human.js";
 import { loadTistoryConnection } from "../../session.js";
 import type { DeletedPost, PublicationProvider, PublishedPost } from "../provider.js";
 import { TistoryClient, uploadImage } from "./client.js";
@@ -106,7 +107,7 @@ export class TistoryProvider implements PublicationProvider {
   }
 
   async delete(input: PostDeleteInput, ctx: WindforceContext): Promise<DeletedPost> {
-    const decision = await ctx.human.wait<ApprovalValue>({
+    const decision = await waitForHumanDecision<ApprovalValue>(ctx, {
       key: "tistory-delete-approval",
       kind: "form",
       title: `티스토리 글 ${input.postId} 삭제 승인`,
@@ -141,7 +142,7 @@ async function requirePostApproval(
 ): Promise<void> {
   const visibilityLabel = input.visibility === "public" ? "공개" : "비공개";
   const operationLabel = operation === "publish" ? "게시" : "수정";
-  const decision = await ctx.human.wait<ApprovalValue>({
+  const decision = await waitForHumanDecision<ApprovalValue>(ctx, {
     key: `tistory-${operation}-approval`,
     kind: "form",
     title: `${visibilityLabel} ${operationLabel} 승인`,

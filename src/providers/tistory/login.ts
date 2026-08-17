@@ -8,6 +8,7 @@ import {
   TISTORY_SESSION_REFERENCE,
 } from "../../config.js";
 import type { ConnectionLoginInput } from "../../contracts.js";
+import { waitForHumanDecision } from "../../human.js";
 import type { TistoryConnection, TistorySession } from "../../session.js";
 import { normalizeTistoryHost, tistoryOrigin } from "./host.js";
 
@@ -33,7 +34,7 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
     await openKakaoLoginIfNeeded(page);
     await fillCredentialsIfPresent(page, input.accountId, input.password);
 
-    const decision = await ctx.human.wait<LoginApproval>({
+    const decision = await waitForHumanDecision<LoginApproval>(ctx, {
       key: "tistory-kakao-login",
       kind: "form",
       title: "카카오 로그인을 완료해 주세요",
