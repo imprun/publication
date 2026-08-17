@@ -34,7 +34,7 @@ runtime enforcement, Worker scheduling, or Release preparation.
 Core's TypeScript release preparation installs production dependencies and
 statically verifies the App entrypoint with Bun. `bunfig.toml` therefore uses a
 hoisted production install, and the login adapter resolves the declared
-Playwright dependency only when `connection.login` runs. This keeps Playwright's
+Puppeteer dependency only when `connection.login` runs. This keeps Puppeteer's
 browser internals out of the static verification graph while retaining it in
 the Linux execution bundle for browser Workers.
 
@@ -44,7 +44,10 @@ the Linux execution bundle for browser Workers.
 Kakao credentials (write-only action input)
              |
              v
-visible Playwright login + HumanTask
+isolated BrowserContext bootstrap
+             |
+             v
+Kakao JSON login + 1-second phone-approval polling
              |
              v
 App Secret Variable: connections/tistory/default/session
@@ -57,6 +60,13 @@ The login result, Resource value, logs, and repository never contain cookie
 plaintext. The raw Secret Variable contains user agent, cookies, local storage,
 and session storage. Every action declares the exact App-owned Resource and
 Secret Variable paths it can read. Only `connection.login` can write them.
+
+The supplied login HAR defines the current Kakao adapter state machine:
+`authenticate.json`, `verify_tms_for_login.json`, OAuth continuation, then the
+Tistory callback. Browser isolation is still required to obtain current CSRF,
+encryption, OAuth, cookie, and user-agent state, but credentials are not typed
+into DOM fields and no separate HumanTask completion signal is used. Session
+state is persisted only after the read-only Tistory management API succeeds.
 
 The first release deliberately supports one exact connection path (`default`).
 Dynamic account paths are deferred because the Core authorization contract is

@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import {
   TISTORY_ACCOUNT_ID_PATH,
@@ -29,39 +28,6 @@ interface CliOptions {
 interface RunView {
   run_id: string;
   state: string;
-}
-
-interface HumanTaskView {
-  id: string;
-  run_id: string;
-  job_id: string;
-  state: string;
-  title: string;
-  description?: string;
-  expires_at: string;
-}
-
-interface HumanTaskList {
-  items: HumanTaskView[];
-}
-
-type LoginProgress =
-  | { kind: "human-task"; task: HumanTaskView }
-  | { kind: "terminal"; run: RunView };
-
-export function humanTaskDecisionRequest(
-  taskId: string,
-  answer: "approve" | "cancel",
-): { args: string[]; input?: unknown } {
-  if (answer === "approve") {
-    return {
-      args: ["human-task", "decide", taskId, "--outcome", "submit", "--value-file", "-"],
-      input: { completed: true },
-    };
-  }
-  return {
-    args: ["human-task", "decide", taskId, "--outcome", "cancel"],
-  };
 }
 
 export function parseCredentialsJson(source: string): LoginCredentials {
@@ -247,55 +213,14 @@ async function createLoginRun(context: string, blogHost: string): Promise<RunVie
   );
 }
 
-async function waitForLoginProgress(context: string, runId: string): Promise<LoginProgress> {
-  const deadline = Date.now() + 11 * 60 * 1000;
-  while (Date.now() < deadline) {
-    const list = await imprunJson<HumanTaskList>(context, [
-      "api",
-      "human-tasks?state=pending&limit=100",
-    ]);
-    const task = list.items.find((candidate) => candidate.run_id === runId);
-    if (task) return { kind: "human-task", task };
-    const run = await imprunJson<RunView>(context, ["run", "show", runId]);
-    if (run.state !== "queued" && run.state !== "running") {
-      return { kind: "terminal", run };
-    }
-    await sleep(1_000);
-  }
-  throw new Error("timed out waiting for automatic login or additional verification");
-}
-
-async function decideHumanTask(context: string, task: HumanTaskView): Promise<void> {
-  const terminal = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log(`HumanTask ${task.id}: ${task.title}`);
-    if (task.description) console.log(task.description);
-    console.log(`expires at ${task.expires_at}`);
-    const answer = (
-      await terminal.question(
-        '카카오톡 또는 휴대전화에서 추가 인증을 마친 뒤 "approve"를 입력하세요. 취소하려면 "cancel": ',
-      )
-    )
-      .trim()
-      .toLowerCase();
-    if (answer !== "approve" && answer !== "cancel") {
-      throw new Error('HumanTask decision must be "approve" or "cancel"');
-    }
-    const request = humanTaskDecisionRequest(task.id, answer);
-    await imprunJson(context, request.args, request.input, true);
-  } finally {
-    terminal.close();
-  }
-}
-
 async function waitForTerminalRun(context: string, runId: string): Promise<RunView> {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 11 * 60 * 1000;
   while (Date.now() < deadline) {
     const run = await imprunJson<RunView>(context, ["run", "show", runId]);
     if (run.state !== "queued" && run.state !== "running") return run;
     await sleep(1_000);
   }
-  throw new Error(`timed out waiting for Run ${runId}`);
+  throw new Error(`timed out waiting for automatic login Run ${runId}`);
 }
 
 function sleep(ms: number) {
@@ -318,16 +243,10 @@ async function main() {
   if (options.configureOnly) return;
 
   const run = await createLoginRun(options.context, runInput.blogHost);
-  console.log(`Run ${run.run_id} created. Waiting for automatic login or additional verification.`);
-  const progress = await waitForLoginProgress(options.context, run.run_id);
-  let terminalRun: RunView;
-  if (progress.kind === "human-task") {
-    console.log(`Job ${progress.task.job_id} requires additional Kakao verification.`);
-    await decideHumanTask(options.context, progress.task);
-    terminalRun = await waitForTerminalRun(options.context, run.run_id);
-  } else {
-    terminalRun = progress.run;
-  }
+  console.log(
+    `Run ${run.run_id} created. Approve Kakao verification when requested; completion is polled automatically.`,
+  );
+  const terminalRun = await waitForTerminalRun(options.context, run.run_id);
   console.log(JSON.stringify(terminalRun, null, 2));
   if (terminalRun.state !== "succeeded" && terminalRun.state !== "success") process.exitCode = 1;
 }
