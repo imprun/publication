@@ -460,6 +460,77 @@ async function navigateToKakaoContinuation(
   } catch {
     throw new Error(`Kakao login continuation failed at ${safePageLocation(continueUrl.href)}`);
   }
+  await submitKakaoOAuthApprovalIfRequired(page, deadline);
+}
+
+async function submitKakaoOAuthApprovalIfRequired(page: Page, deadline: number): Promise<void> {
+  const formDeadline = Math.min(deadline, Date.now() + LOGIN_FORM_READY_TIMEOUT_MS);
+  while (Date.now() < formDeadline) {
+    const currentURL = parsePageURL(page.url());
+    if (
+      !currentURL ||
+      currentURL.hostname !== "kauth.kakao.com" ||
+      currentURL.pathname !== "/oauth/authorize"
+    ) {
+      return;
+    }
+
+    const hasApprovalForm = await page.evaluate(() =>
+      Array.from(document.forms).some((form) => {
+        const action = new URL(
+          form.getAttribute("action") || window.location.href,
+          window.location.href,
+        );
+        return (
+          form.method.toLowerCase() === "post" &&
+          action.hostname === "kauth.kakao.com" &&
+          action.pathname === "/oauth/authorize" &&
+          ["stsc", "csts", "auth_tran_id", "user_oauth_approval"].every((name) =>
+            Boolean(form.elements.namedItem(name)),
+          )
+        );
+      }),
+    );
+    if (!hasApprovalForm) {
+      await sleep(
+        Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, formDeadline - Date.now())),
+      );
+      continue;
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
+    try {
+      await Promise.all([
+        page.waitForNavigation({
+          waitUntil: "domcontentloaded",
+          timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
+        }),
+        page.evaluate(() => {
+          const form = Array.from(document.forms).find((candidate) => {
+            const action = new URL(
+              candidate.getAttribute("action") || window.location.href,
+              window.location.href,
+            );
+            return (
+              candidate.method.toLowerCase() === "post" &&
+              action.hostname === "kauth.kakao.com" &&
+              action.pathname === "/oauth/authorize" &&
+              ["stsc", "csts", "auth_tran_id", "user_oauth_approval"].every((name) =>
+                Boolean(candidate.elements.namedItem(name)),
+              )
+            );
+          });
+          if (!form) throw new Error("Kakao OAuth approval form disappeared");
+          HTMLFormElement.prototype.submit.call(form);
+        }),
+      ]);
+      return;
+    } catch {
+      throw new Error(`Kakao OAuth approval failed at ${safePageLocation(page.url())}`);
+    }
+  }
+  throw new Error(`Kakao OAuth approval form was not available at ${safePageLocation(page.url())}`);
 }
 
 function kakaoResponseError(message: string, response: KakaoHTTPResponse): string {
