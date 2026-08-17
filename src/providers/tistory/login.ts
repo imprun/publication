@@ -294,7 +294,8 @@ type KakaoAuthenticationState =
   | "runtime-unavailable"
   | "two-step-pending"
   | "navigating"
-  | "rejected";
+  | "rejected"
+  | `rejected:${string}`;
 
 async function authenticateKakaoAccountWithPageJavaScript(
   page: Page,
@@ -316,8 +317,9 @@ async function authenticateKakaoAccountWithPageJavaScript(
   if (state === "runtime-unavailable") {
     throw new Error("Kakao account JavaScript client did not become ready");
   }
-  if (state === "rejected") {
-    throw new Error("Kakao account authentication did not enter a supported approval state");
+  if (state === "rejected" || state.startsWith("rejected:")) {
+    const status = state.includes(":") ? state.slice(state.indexOf(":") + 1) : "unknown";
+    throw new Error(`Kakao account authentication was rejected with status ${status}`);
   }
   if (state === "navigating") return;
 
@@ -445,14 +447,23 @@ async function callKakaoAuthenticate(
         } catch {
           return "rejected";
         }
-        if (!response || typeof response !== "object") return "rejected";
+        if (!response || typeof response !== "object") return "rejected:invalid-response";
         const continueUrl = Reflect.get(response, "continueUrl");
         if (typeof continueUrl === "string" && continueUrl.length > 0) {
           setTimeout(() => window.location.assign(continueUrl), 0);
           return "navigating";
         }
         const token = Reflect.get(response, "token");
-        if (typeof token !== "string" || token.length === 0) return "rejected";
+        if (typeof token !== "string" || token.length === 0) {
+          const status = Reflect.get(response, "status");
+          const safeStatus =
+            typeof status === "number"
+              ? String(status)
+              : typeof status === "string" && /^[A-Z0-9_-]{1,64}$/.test(status)
+                ? status
+                : "unknown";
+          return `rejected:${safeStatus}` as KakaoAuthenticationState;
+        }
         Reflect.set(window, Symbol.for(stateKey), { client, token });
         return "two-step-pending";
       },
