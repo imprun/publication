@@ -2,15 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["accountId", "password"],
+  "required": ["accountId"],
   "properties": {
     "accountId": {
-      "type": "string",
-      "minLength": 1,
-      "writeOnly": true,
-      "x-windforce-secret": true
-    },
-    "password": {
       "type": "string",
       "minLength": 1,
       "writeOnly": true,

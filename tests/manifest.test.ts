@@ -65,7 +65,7 @@ describe("Windforce manifest", () => {
       readFileSync(join(root, "schemas", "connection.login.input.schema.json"), "utf8"),
     );
     expect(loginSchema.properties.accountId.writeOnly).toBe(true);
-    expect(loginSchema.properties.password.writeOnly).toBe(true);
+    expect(loginSchema.properties.password).toBeUndefined();
     expect(loginSchema.required).toEqual(["blogHost"]);
 
     for (const filename of readdirSync(join(root, "schemas")).filter((name) =>
@@ -75,6 +75,24 @@ describe("Windforce manifest", () => {
       expect(text).not.toContain("cookie");
       expect(text).not.toContain("password");
       expect(text).not.toContain("storagestate");
+    }
+  });
+
+  it("uses Kakao SDK authorization without inspecting login controls", () => {
+    const loginSource = readFileSync(join(root, "src", "providers", "tistory", "login.ts"), "utf8");
+    expect(loginSource).toContain("authorize.call(auth");
+    expect(loginSource).toContain("loginHint");
+    expect(loginSource).toContain("kakaoAuthState");
+    for (const forbidden of [
+      "waitForSelector",
+      "locator(",
+      "button[type=",
+      "input[name=",
+      "waitForNavigation",
+      "requestSubmit",
+      "dispatchEvent",
+    ]) {
+      expect(loginSource).not.toContain(forbidden);
     }
   });
 });
