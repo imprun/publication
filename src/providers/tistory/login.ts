@@ -266,7 +266,15 @@ async function submitKakaoLoginWithPageJavaScript(
           'input[name="loginKey"], input[name="loginId"]',
         );
         const password = document.querySelector<HTMLInputElement>('input[name="password"]');
-        return Boolean(account?.form && password?.form && account.form === password.form);
+        const form = account?.form ?? password?.form;
+        const submitter =
+          form?.querySelector<HTMLButtonElement | HTMLInputElement>(
+            'button[type="submit"], input[type="submit"]',
+          ) ??
+          document.querySelector<HTMLButtonElement | HTMLInputElement>(
+            'button[type="submit"], input[type="submit"]',
+          );
+        return Boolean(account && password && (form || submitter));
       },
       { timeout: KAKAO_LOGIN_FORM_READY_TIMEOUT_MS },
     )
@@ -281,8 +289,8 @@ async function submitKakaoLoginWithPageJavaScript(
           'input[name="loginKey"], input[name="loginId"]',
         );
         const passwordInput = document.querySelector<HTMLInputElement>('input[name="password"]');
-        const form = account?.form;
-        if (!account || !passwordInput || !form || passwordInput.form !== form) return false;
+        const form = account?.form ?? passwordInput?.form;
+        if (!account || !passwordInput) return false;
 
         const valueSetter = Object.getOwnPropertyDescriptor(
           HTMLInputElement.prototype,
@@ -301,15 +309,21 @@ async function submitKakaoLoginWithPageJavaScript(
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
 
-        const submitter = form.querySelector<HTMLButtonElement | HTMLInputElement>(
-          'button[type="submit"], input[type="submit"]',
-        );
-        if (typeof form.requestSubmit === "function") {
+        const submitter =
+          form?.querySelector<HTMLButtonElement | HTMLInputElement>(
+            'button[type="submit"], input[type="submit"]',
+          ) ??
+          document.querySelector<HTMLButtonElement | HTMLInputElement>(
+            'button[type="submit"], input[type="submit"]',
+          );
+        if (form && typeof form.requestSubmit === "function") {
           form.requestSubmit(submitter ?? undefined);
         } else if (submitter) {
           submitter.click();
-        } else {
+        } else if (form) {
           form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        } else {
+          return false;
         }
         return true;
       },
