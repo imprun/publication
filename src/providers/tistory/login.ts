@@ -122,11 +122,12 @@ async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
   }
 }
 
-async function fillCredentialsIfPresent(page: Page, accountId: string, password: string) {
+async function fillCredentialsIfPresent(page: Page, accountId?: string, password?: string) {
   const loginId = page.locator('input[name="loginId"]');
   const passwordInput = page.locator('input[name="password"]');
-  if (await loginId.isVisible().catch(() => false)) await loginId.fill(accountId);
-  if (await passwordInput.isVisible().catch(() => false)) await passwordInput.fill(password);
+  if (accountId && (await loginId.isVisible().catch(() => false))) await loginId.fill(accountId);
+  if (password && (await passwordInput.isVisible().catch(() => false)))
+    await passwordInput.fill(password);
   const saveSignedIn = page.locator('input[name="saveSignedIn"]');
   if ((await saveSignedIn.isVisible().catch(() => false)) && (await saveSignedIn.isChecked())) {
     await saveSignedIn.uncheck();

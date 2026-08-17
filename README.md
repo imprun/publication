@@ -7,8 +7,9 @@ the backend contract is complete.
 ## Backend flow
 
 1. `connection.login` connects Playwright to the Job-scoped `edge-cdp` capability,
-   opens a page in the user's visible Chrome, fills the Kakao account fields, and
-   waits for the person to submit login and complete 2FA.
+   opens a page in the user's visible Chrome, optionally fills supplied Kakao
+   account fields, and waits for the person to enter or submit login and complete
+   2FA. Production assignment needs only the public Tistory blog host.
 2. The action writes the Playwright session to the App-owned Secret Variable
    `connections/tistory/default/session`.
 3. It writes safe connection metadata to the App-owned Resource

@@ -66,6 +66,7 @@ describe("Windforce manifest", () => {
     );
     expect(loginSchema.properties.accountId.writeOnly).toBe(true);
     expect(loginSchema.properties.password.writeOnly).toBe(true);
+    expect(loginSchema.required).toEqual(["blogHost"]);
 
     for (const filename of readdirSync(join(root, "schemas")).filter((name) =>
       name.endsWith("output.schema.json"),
