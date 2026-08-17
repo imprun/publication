@@ -425,10 +425,10 @@ async function callKakaoAuthenticate(
         const browserHints = {
           a: highEntropy.architecture,
           b: highEntropy.bitness,
-          m: userAgentData?.mobile ?? false,
+          m: String(userAgentData?.mobile ?? false),
           pv: highEntropy.platformVersion,
           fvl: highEntropy.fullVersionList,
-          mo: highEntropy.model,
+          mo: navigator.maxTouchPoints,
           p: userAgentData?.platform,
         };
 
