@@ -23,6 +23,7 @@ type LoginOutcome =
   | "automatic-success"
   | "delayed-success"
   | "oauth-approval"
+  | "captcha-success"
   | "authentication-failure"
   | "credential-failure"
   | "untrusted-continuation";
@@ -49,6 +50,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
   let popupClosed = false;
   let rawPasswordSent = false;
   let securityContextMatches = false;
+  let captchaTokenSent = false;
   const tistoryAuthState = vi.fn();
   const kakaoAuthorize = vi.fn();
   const kakaoAuthenticate = vi.fn();
@@ -136,6 +138,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
         };
         if (request.endpoint?.includes("/login/authenticate.json")) {
           kakaoAuthenticate();
+          captchaTokenSent = request.body?.captchaToken === "fixture-captcha-token";
           rawPasswordSent = request.body?.password === "fixture-only";
           const securityContext = request.body?.security_context as
             | {
@@ -170,6 +173,23 @@ function createBrowserHarness(outcome: LoginOutcome) {
               continueUrl: "https://kauth.kakao.com/oauth/authorize?client_id=fixture",
             };
           }
+          if (outcome === "captcha-success") {
+            if (!captchaTokenSent) {
+              return {
+                httpStatus: 200,
+                status: -481,
+                dkaptcha: {
+                  src: "https://accounts.kakaocdn.net/dkaptcha/fixture.js",
+                  widgetId: "fixture-widget",
+                },
+              };
+            }
+            return {
+              httpStatus: 200,
+              status: 0,
+              continueUrl: "https://www.tistory.com/auth/kakao/redirect",
+            };
+          }
           if (outcome === "credential-failure") {
             return { httpStatus: 200, status: -450 };
           }
@@ -197,6 +217,9 @@ function createBrowserHarness(outcome: LoginOutcome) {
       }
       if (typeof argument === "string" && argument.includes("/manage/posts.json")) {
         return authenticated;
+      }
+      if (source.includes("globalObject.dkaptcha") && source.includes("addCallbackListener")) {
+        return "fixture-captcha-token";
       }
       if (source.includes("requiredFields") && source.includes("DOMParser")) {
         if (!currentURL.includes("kauth.kakao.com/oauth/authorize")) return false;
@@ -298,6 +321,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
     kakaoOAuthApproval,
     rawPasswordSent: () => rawPasswordSent,
     securityContextMatches: () => securityContextMatches,
+    captchaTokenSent: () => captchaTokenSent,
     humanWait,
     setVariable,
     setResource,
@@ -428,6 +452,20 @@ describe("Tistory Browser Edge login", () => {
       expect.anything(),
     );
     expect(harness.kakaoOAuthApproval).toHaveBeenCalledOnce();
+    expect(harness.setVariable).toHaveBeenCalledOnce();
+    expect(harness.setResource).toHaveBeenCalledOnce();
+    expectOwnedTargetsCleaned(harness);
+  });
+
+  it("continues HTTP authentication with a browser-presented Kakao CAPTCHA token", async () => {
+    const harness = createBrowserHarness("captcha-success");
+
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(harness.kakaoAuthenticate).toHaveBeenCalledTimes(2);
+    expect(harness.captchaTokenSent()).toBe(true);
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
     expectOwnedTargetsCleaned(harness);
