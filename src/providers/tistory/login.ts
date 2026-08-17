@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
 import type { BrowserContext, Page } from "puppeteer-core";
 import {
@@ -27,52 +27,11 @@ const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 const KAKAO_SDK_READY_TIMEOUT_MS = 10_000;
+const KAKAO_LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
 const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
-const KAKAO_AUTHENTICATE_ENDPOINT = "/api/v2/login/authenticate.json";
-const KAKAO_VERIFY_TMS_ENDPOINT = "/api/v2/two_step_verification/verify_tms_for_login.json";
-const KAKAO_SUCCESS = 0;
-const KAKAO_NETWORK_ERROR = -4;
-const KAKAO_TWO_STEP_VERIFICATION_REQUIRED = -451;
-const KAKAO_CAPTCHA_REQUIRED = -481;
-const KAKAO_INVALID_CAPTCHA_RESPONSE = -482;
-const KAKAO_CAPTCHA_MAX_ATTEMPTS = 3;
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
-
-interface KakaoLoginBootstrap {
-  botSignals: number[];
-  csrf: string;
-  encryptionPassphrase?: string;
-  loginUrl: string;
-  locale: string;
-  mousePositions: Array<{
-    x: string;
-    y: string;
-    t: number;
-    e: 4;
-  }>;
-  userAgentHints: {
-    a?: string;
-    b?: string;
-    fvl?: Array<{ br: string; vr: string }>;
-    m?: string;
-    mo?: number;
-    p?: string;
-    pv?: string;
-  } | null;
-}
-
-interface KakaoHTTPResponse {
-  httpStatus: number;
-  status?: number;
-  token?: string;
-  continueUrl?: string;
-  dkaptcha?: {
-    src: string;
-    widgetId: string;
-  };
-}
 
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
   const host = normalizeTistoryHost(input.blogHost);
@@ -156,8 +115,8 @@ async function performLogin(
   page: Page,
 ): Promise<TistoryLoginResult> {
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
-  const kakaoLoginHtml = await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
-  await authenticateKakaoAccount(page, input.accountId, input.password, kakaoLoginHtml, deadline);
+  await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
+  await submitKakaoLoginWithPageJavaScript(page, input.accountId, input.password);
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();
@@ -215,7 +174,7 @@ async function startKakaoAuthorization(
   page: Page,
   redirectUrl: string,
   deadline: number,
-): Promise<string> {
+): Promise<void> {
   const loginUrl = new URL(TISTORY_LOGIN_URL);
   loginUrl.searchParams.set("redirectUrl", redirectUrl);
   await page.goto(loginUrl.href, {
@@ -292,463 +251,79 @@ async function startKakaoAuthorization(
     await navigation.catch(() => null);
     throw new Error("Tistory Kakao SDK authorization failed");
   }
-  const loginResponse = await navigation;
-  if (!loginResponse) throw new Error("Kakao login navigation did not return an HTTP response");
-  const loginHtml = await loginResponse.text().catch(() => "");
-  if (!loginHtml) throw new Error("Kakao login navigation returned an empty response");
-  return loginHtml;
+  await navigation;
 }
 
-async function authenticateKakaoAccount(
+async function submitKakaoLoginWithPageJavaScript(
   page: Page,
   accountId: string,
   password: string,
-  loginHtml: string,
-  deadline: number,
 ): Promise<void> {
-  const bootstrap = await readKakaoLoginBootstrap(page, loginHtml);
-  const encryptedPassword = bootstrap.encryptionPassphrase
-    ? encryptKakaoPassword(password, bootstrap.encryptionPassphrase)
-    : password;
-  const loginBody: Record<string, unknown> = {
-    _csrf: bootstrap.csrf,
-    loginId: accountId,
-    loginKey: accountId,
-    password: encryptedPassword,
-    staySignedIn: false,
-    saveSignedIn: false,
-    loginUrl: bootstrap.loginUrl,
-    lang: bootstrap.locale,
-    security_context: {
-      a: bootstrap.mousePositions,
-      b: bootstrap.userAgentHints,
-      c: bootstrap.botSignals.length > 0,
-      d: bootstrap.botSignals,
-    },
-    ...(bootstrap.encryptionPassphrase ? { k: true } : {}),
-  };
-  let response = await callKakaoJSON(page, KAKAO_AUTHENTICATE_ENDPOINT, loginBody);
-  let captchaAttempts = 0;
-  while (
-    response.status === KAKAO_CAPTCHA_REQUIRED ||
-    response.status === KAKAO_INVALID_CAPTCHA_RESPONSE
-  ) {
-    captchaAttempts += 1;
-    if (captchaAttempts > KAKAO_CAPTCHA_MAX_ATTEMPTS || !response.dkaptcha) {
-      throw new Error("Kakao CAPTCHA verification could not be completed");
-    }
-    loginBody.captchaToken = await waitForKakaoCaptcha(page, response.dkaptcha, deadline);
-    response = await callKakaoJSON(page, KAKAO_AUTHENTICATE_ENDPOINT, loginBody);
-  }
-
-  if (response.status === KAKAO_SUCCESS && response.continueUrl) {
-    await navigateToKakaoContinuation(page, response.continueUrl, deadline);
-    return;
-  }
-  if (response.status !== KAKAO_TWO_STEP_VERIFICATION_REQUIRED || !response.token) {
-    throw new Error(
-      kakaoResponseError("Kakao credential authentication was not accepted", response),
-    );
-  }
-
-  const continueUrl = await waitForKakaoTMSApproval(page, bootstrap.csrf, response.token, deadline);
-  await navigateToKakaoContinuation(page, continueUrl, deadline);
-}
-
-async function waitForKakaoCaptcha(
-  page: Page,
-  challenge: NonNullable<KakaoHTTPResponse["dkaptcha"]>,
-  deadline: number,
-): Promise<string> {
-  const scriptURL = new URL(challenge.src, "https://accounts.kakao.com");
-  const trustedHost =
-    scriptURL.hostname === "kakao.com" ||
-    scriptURL.hostname.endsWith(".kakao.com") ||
-    scriptURL.hostname === "kakaocdn.net" ||
-    scriptURL.hostname.endsWith(".kakaocdn.net");
-  if (scriptURL.protocol !== "https:" || !trustedHost || !challenge.widgetId) {
-    throw new Error("Kakao returned an untrusted CAPTCHA challenge");
-  }
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
-
   await page
-    .evaluate(
-      async ({ scriptSrc, widgetId }) => {
-        document.title = "Kakao verification";
-        const root = document.createElement("main");
-        root.id = `publication-dkaptcha-${Date.now()}`;
-        root.style.cssText =
-          "min-height:100vh;display:grid;place-items:center;background:#fff;color:#111";
-        document.body.replaceChildren(root);
-
-        const globalObject = window as typeof window & {
-          __publicationKakaoCaptchaToken?: string;
-          dkaptcha?: {
-            render: (
-              elementId: string,
-              options: {
-                widget: string;
-                theme: "dark" | "white";
-                language: "ko" | "en";
-                option: "iframe";
-              },
-            ) => {
-              addCallbackListener: (callback: (result: { token?: unknown }) => void) => void;
-            };
-          };
-        };
-
-        if (!globalObject.dkaptcha) {
-          await new Promise<void>((resolve, reject) => {
-            const script = document.createElement("script");
-            script.src = scriptSrc;
-            script.async = true;
-            script.addEventListener("load", () => resolve(), { once: true });
-            script.addEventListener("error", () => reject(new Error("CAPTCHA load failed")), {
-              once: true,
-            });
-            document.head.appendChild(script);
-          });
-        }
-        if (!globalObject.dkaptcha) throw new Error("CAPTCHA API is unavailable");
-        globalObject.dkaptcha
-          .render(root.id, {
-            widget: widgetId,
-            theme: "white",
-            language: navigator.language.startsWith("ko") ? "ko" : "en",
-            option: "iframe",
-          })
-          .addCallbackListener((result) => {
-            if (typeof result.token === "string" && result.token) {
-              globalObject.__publicationKakaoCaptchaToken = result.token;
-            }
-          });
+    .waitForFunction(
+      () => {
+        const account = document.querySelector<HTMLInputElement>(
+          'input[name="loginKey"], input[name="loginId"]',
+        );
+        const password = document.querySelector<HTMLInputElement>('input[name="password"]');
+        return Boolean(account?.form && password?.form && account.form === password.form);
       },
-      { scriptSrc: scriptURL.href, widgetId: challenge.widgetId },
+      { timeout: KAKAO_LOGIN_FORM_READY_TIMEOUT_MS },
     )
     .catch(() => {
-      throw new Error("Kakao CAPTCHA widget could not be initialized");
+      throw new Error("Kakao login JavaScript did not become ready");
     });
 
-  while (Date.now() < deadline) {
-    const token = await page.evaluate(() => {
-      const globalObject = window as typeof window & {
-        __publicationKakaoCaptchaToken?: string;
-      };
-      const value = globalObject.__publicationKakaoCaptchaToken;
-      if (typeof value === "string" && value) {
-        delete globalObject.__publicationKakaoCaptchaToken;
-        return value;
-      }
-      return null;
-    });
-    if (token) return token;
-    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
-  }
-  throw new Error("Kakao CAPTCHA verification did not complete before the login deadline");
-}
+  const submitted = await page
+    .evaluate(
+      async ({ accountId, password }) => {
+        const account = document.querySelector<HTMLInputElement>(
+          'input[name="loginKey"], input[name="loginId"]',
+        );
+        const passwordInput = document.querySelector<HTMLInputElement>('input[name="password"]');
+        const form = account?.form;
+        if (!account || !passwordInput || !form || passwordInput.form !== form) return false;
 
-async function readKakaoLoginBootstrap(
-  page: Page,
-  loginHtml: string,
-): Promise<KakaoLoginBootstrap> {
-  const nextDataText =
-    /<script\b(?=[^>]*\bid=(?:"__NEXT_DATA__"|'__NEXT_DATA__'))[^>]*>([\s\S]*?)<\/script>/i.exec(
-      loginHtml,
-    )?.[1];
-  if (!nextDataText) {
-    throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
-  }
-  const nextData = JSON.parse(nextDataText) as {
-    props?: {
-      pageProps?: {
-        pageContext?: {
-          commonContext?: { _csrf?: unknown; locale?: unknown; p?: unknown };
-          context?: { loginUrl?: unknown };
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        if (!valueSetter) return false;
+        const setValue = (input: HTMLInputElement, value: string) => {
+          valueSetter.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
         };
-      };
-    };
-  };
-  const pageContext = nextData.props?.pageProps?.pageContext;
-  const csrf = pageContext?.commonContext?._csrf;
-  const locale = pageContext?.commonContext?.locale;
-  const encryptionPassphrase = pageContext?.commonContext?.p;
-  const loginUrl = pageContext?.context?.loginUrl;
-  if (typeof csrf !== "string" || typeof locale !== "string" || typeof loginUrl !== "string") {
-    throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
-  }
+        setValue(account, accountId);
+        setValue(passwordInput, password);
 
-  const browserContext = await page.evaluate(async () => {
-    const encodeUserAgentValue = (value: string) =>
-      Array.from(value)
-        .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
-        .join("");
-    let userAgentHints: KakaoLoginBootstrap["userAgentHints"] = null;
-    const userAgentData = Reflect.get(navigator, "userAgentData") as
-      | {
-          getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+
+        const submitter = form.querySelector<HTMLButtonElement | HTMLInputElement>(
+          'button[type="submit"], input[type="submit"]',
+        );
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit(submitter ?? undefined);
+        } else if (submitter) {
+          submitter.click();
+        } else {
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
         }
-      | undefined;
-    if (userAgentData?.getHighEntropyValues) {
-      const hints = await userAgentData.getHighEntropyValues([
-        "architecture",
-        "bitness",
-        "fullVersionList",
-        "model",
-        "platform",
-        "platformVersion",
-      ]);
-      const fullVersionList = Array.isArray(hints.fullVersionList)
-        ? hints.fullVersionList
-            .map((entry) => {
-              if (!entry || typeof entry !== "object") return null;
-              const brand = Reflect.get(entry, "brand");
-              const version = Reflect.get(entry, "version");
-              return typeof brand === "string" && typeof version === "string"
-                ? { br: encodeUserAgentValue(brand), vr: encodeUserAgentValue(version) }
-                : null;
-            })
-            .filter((entry): entry is { br: string; vr: string } => entry !== null)
-        : undefined;
-      userAgentHints = {
-        ...(typeof hints.architecture === "string"
-          ? { a: encodeUserAgentValue(hints.architecture) }
-          : {}),
-        ...(typeof hints.bitness === "string" ? { b: encodeUserAgentValue(hints.bitness) } : {}),
-        ...(fullVersionList && fullVersionList.length > 0 ? { fvl: fullVersionList } : {}),
-        ...(typeof hints.model === "string" ? { m: encodeUserAgentValue(hints.model) } : {}),
-        ...(typeof Reflect.get(userAgentData, "mobile") === "boolean"
-          ? { mo: Reflect.get(userAgentData, "mobile") ? 1 : 0 }
-          : {}),
-        ...(typeof Reflect.get(userAgentData, "platform") === "string"
-          ? { p: encodeUserAgentValue(Reflect.get(userAgentData, "platform") as string) }
-          : {}),
-        ...(typeof hints.platformVersion === "string"
-          ? { pv: encodeUserAgentValue(hints.platformVersion) }
-          : {}),
-      };
-    }
-
-    const botSignals: number[] = [];
-    const webdriverDetected =
-      navigator.webdriver ||
-      Object.keys(window).some((key) => key.startsWith("cdc_")) ||
-      Object.keys(document).some((key) => key.startsWith("cdc_"));
-    if (webdriverDetected) botSignals.push(11);
-    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-      const hasTouch = "ontouchstart" in window || typeof TouchEvent !== "undefined";
-      if (!hasTouch || navigator.maxTouchPoints === 0) botSignals.push(23);
-    }
-
-    // Kakao's current login client always appends the submit button center as
-    // event type 4. An HTTP-only submission has no trusted DOM event and no
-    // physical pointer history, so the same client reports signals 37 and 44.
-    botSignals.push(37, 44);
-    const mousePositions: KakaoLoginBootstrap["mousePositions"] = [
-      {
-        x: Math.round((window.innerWidth / 2) * 10_000).toString(16),
-        y: Math.round((window.innerHeight / 2) * 10_000).toString(16),
-        t: Date.now(),
-        e: 4,
+        return true;
       },
-    ];
-
-    return { botSignals, mousePositions, userAgentHints };
-  });
-  return {
-    botSignals: browserContext.botSignals,
-    csrf,
-    ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
-      ? { encryptionPassphrase }
-      : {}),
-    loginUrl,
-    locale,
-    mousePositions: browserContext.mousePositions,
-    userAgentHints: browserContext.userAgentHints,
-  };
+      { accountId, password },
+    )
+    .catch(() => false);
+  if (!submitted) throw new Error("Kakao login JavaScript submission failed");
 }
 
-async function waitForKakaoTMSApproval(
-  page: Page,
-  csrf: string,
-  token: string,
-  deadline: number,
-): Promise<string> {
-  while (Date.now() < deadline) {
-    const response = await callKakaoJSON(page, KAKAO_VERIFY_TMS_ENDPOINT, {
-      _csrf: csrf,
-      token,
-      isRememberBrowser: false,
-    });
-    if (response.status === KAKAO_SUCCESS && response.continueUrl) return response.continueUrl;
-    if (
-      response.status !== KAKAO_TWO_STEP_VERIFICATION_REQUIRED &&
-      response.status !== KAKAO_NETWORK_ERROR
-    ) {
-      throw new Error(kakaoResponseError("Kakao two-step verification was not accepted", response));
-    }
-    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
-  }
-  throw new Error("Kakao two-step verification did not complete before the login deadline");
-}
-
-async function callKakaoJSON(
-  page: Page,
-  endpoint: string,
-  body: Record<string, unknown>,
-): Promise<KakaoHTTPResponse> {
-  return page.evaluate(
-    async ({ endpoint, body }) => {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "include",
-      });
-      const payload = await response.json().catch(() => null);
-      if (!payload || typeof payload !== "object") return { httpStatus: response.status };
-      const status = Reflect.get(payload, "status");
-      const token = Reflect.get(payload, "token");
-      const continueUrl = Reflect.get(payload, "continueUrl");
-      const dkaptchaValue = Reflect.get(payload, "dkaptcha");
-      const dkaptcha =
-        dkaptchaValue && typeof dkaptchaValue === "object"
-          ? {
-              src: Reflect.get(dkaptchaValue, "src"),
-              widgetId: Reflect.get(dkaptchaValue, "widgetId"),
-            }
-          : undefined;
-      return {
-        httpStatus: response.status,
-        ...(typeof status === "number" ? { status } : {}),
-        ...(typeof token === "string" ? { token } : {}),
-        ...(typeof continueUrl === "string" ? { continueUrl } : {}),
-        ...(typeof dkaptcha?.src === "string" && typeof dkaptcha.widgetId === "string"
-          ? { dkaptcha: { src: dkaptcha.src, widgetId: dkaptcha.widgetId } }
-          : {}),
-      };
-    },
-    { endpoint, body },
+function isPostAuthenticationTistoryURL(url: URL, host: string): boolean {
+  return (
+    (url.hostname === host || url.hostname === "www.tistory.com") &&
+    !url.pathname.startsWith("/auth/")
   );
-}
-
-async function navigateToKakaoContinuation(
-  page: Page,
-  rawContinueUrl: string,
-  deadline: number,
-): Promise<void> {
-  let continueUrl: URL;
-  try {
-    continueUrl = new URL(rawContinueUrl, "https://accounts.kakao.com/");
-  } catch {
-    throw new Error("Kakao login returned an invalid continuation URL");
-  }
-  if (
-    continueUrl.protocol !== "https:" ||
-    !["accounts.kakao.com", "kauth.kakao.com", "www.tistory.com"].includes(continueUrl.hostname)
-  ) {
-    throw new Error("Kakao login returned an untrusted continuation URL");
-  }
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
-  try {
-    await page.goto(continueUrl.href, {
-      waitUntil: "domcontentloaded",
-      timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
-    });
-  } catch {
-    throw new Error(`Kakao login continuation failed at ${safePageLocation(continueUrl.href)}`);
-  }
-  await submitKakaoOAuthApprovalByHTTP(page, deadline);
-}
-
-async function submitKakaoOAuthApprovalByHTTP(page: Page, deadline: number): Promise<void> {
-  const currentURL = parsePageURL(page.url());
-  if (
-    !currentURL ||
-    currentURL.hostname !== "kauth.kakao.com" ||
-    currentURL.pathname !== "/oauth/authorize"
-  ) {
-    return;
-  }
-  if (Date.now() >= deadline) {
-    throw new Error("Kakao login did not complete before the login deadline");
-  }
-
-  const result = await page.evaluate(async () => {
-    const requiredFields = ["stsc", "csts", "auth_tran_id", "user_oauth_approval"];
-    const response = await fetch(window.location.href, {
-      credentials: "include",
-      cache: "no-store",
-    });
-    if (!response.ok) return { httpStatus: response.status, submitted: false };
-    const html = await response.text();
-    const parsed = new DOMParser().parseFromString(html, "text/html");
-    const form = Array.from(parsed.forms).find((candidate) => {
-      const action = new URL(
-        candidate.getAttribute("action") || window.location.href,
-        window.location.href,
-      );
-      return (
-        candidate.method.toLowerCase() === "post" &&
-        action.hostname === "kauth.kakao.com" &&
-        action.pathname === "/oauth/authorize" &&
-        requiredFields.every((name) => Boolean(candidate.elements.namedItem(name)))
-      );
-    });
-    if (!form) return { httpStatus: response.status, submitted: false };
-
-    const action = new URL(
-      form.getAttribute("action") || window.location.href,
-      window.location.href,
-    );
-    const body = new URLSearchParams();
-    for (const name of requiredFields) {
-      const field = form.elements.namedItem(name);
-      if (!(field instanceof HTMLInputElement)) {
-        return { httpStatus: response.status, submitted: false };
-      }
-      body.set(name, field.value);
-    }
-    try {
-      const approval = await fetch(action.href, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body,
-        credentials: "include",
-        redirect: "follow",
-      });
-      return { httpStatus: approval.status, submitted: true };
-    } catch (error) {
-      if (error instanceof TypeError) return { submitted: true };
-      throw error;
-    }
-  });
-  if (!result.submitted) {
-    throw new Error(
-      `Kakao OAuth HTTP approval was not accepted (HTTP ${result.httpStatus ?? "unknown"})`,
-    );
-  }
-}
-
-function kakaoResponseError(message: string, response: KakaoHTTPResponse): string {
-  const status = response.status ?? "unknown";
-  return `${message} (status ${status}, HTTP ${response.httpStatus})`;
-}
-
-function encryptKakaoPassword(value: string, passphrase: string): string {
-  const salt = randomBytes(8);
-  const password = Buffer.from(passphrase, "utf8");
-  let derived = Buffer.alloc(0);
-  let previous = Buffer.alloc(0);
-  while (derived.length < 48) {
-    previous = createHash("md5").update(previous).update(password).update(salt).digest();
-    derived = Buffer.concat([derived, previous]);
-  }
-  const cipher = createCipheriv("aes-256-cbc", derived.subarray(0, 32), derived.subarray(32, 48));
-  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return Buffer.concat([Buffer.from("Salted__"), salt, encrypted]).toString("base64");
 }
 
 async function waitForAuthenticatedSession(
@@ -761,14 +336,19 @@ async function waitForAuthenticatedSession(
   const apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`;
 
   while (Date.now() < deadline) {
-    const remaining = deadline - Date.now();
-    await page
-      .goto(managementURL, {
-        waitUntil: "domcontentloaded",
-        timeout: Math.max(1, Math.min(10_000, remaining)),
-      })
-      .catch(() => null);
-    if (await isAuthenticatedManagementSession(page, origin, host, apiURL)) return;
+    const currentURL = parsePageURL(page.url());
+    if (currentURL && isPostAuthenticationTistoryURL(currentURL, host)) {
+      if (currentURL.origin !== origin || !currentURL.pathname.startsWith("/manage")) {
+        const remaining = deadline - Date.now();
+        await page
+          .goto(managementURL, {
+            waitUntil: "domcontentloaded",
+            timeout: Math.max(1, Math.min(10_000, remaining)),
+          })
+          .catch(() => null);
+      }
+      if (await isAuthenticatedManagementSession(page, origin, host, apiURL)) return;
+    }
     await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
   }
   throw new Error(
