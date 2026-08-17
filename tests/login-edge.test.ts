@@ -311,6 +311,7 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.passwordFill).toHaveBeenCalledWith(input.password);
     expect(harness.kakaoLoginLinkClick).toHaveBeenCalledOnce();
     expect(harness.submitClick).toHaveBeenCalledOnce();
+    expect(harness.page.waitForNavigation).toHaveBeenCalledOnce();
     expect(harness.page.goto).toHaveBeenNthCalledWith(
       1,
       "https://www.tistory.com/auth/login?redirectUrl=https%3A%2F%2Fexample.tistory.com%2Fmanage%2Fnewpost",
