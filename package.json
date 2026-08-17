@@ -16,7 +16,7 @@
   "dependencies": {
     "@imprun/app-sdk": "https://codeload.github.com/imprun/app-sdk/tar.gz/4657fb5408bacc617e93ca698c9d3a111de36e2a",
     "marked": "16.0.0",
-    "playwright": "1.60.0",
+    "puppeteer-core": "25.7.0",
     "sanitize-html": "2.17.7",
     "zod": "4.4.3"
   },

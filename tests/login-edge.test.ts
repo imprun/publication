@@ -3,12 +3,12 @@ import { loginToTistory } from "../src/providers/tistory/login.js";
 import { mockContext } from "./helpers.js";
 
 const browserMocks = vi.hoisted(() => ({
-  close: vi.fn(async () => {}),
-  connectOverCDP: vi.fn(),
+  connect: vi.fn(),
+  disconnect: vi.fn(async () => {}),
 }));
 
-vi.mock("playwright", () => ({
-  chromium: { connectOverCDP: browserMocks.connectOverCDP },
+vi.mock("puppeteer-core", () => ({
+  default: { connect: browserMocks.connect },
 }));
 
 const input = {
@@ -21,39 +21,44 @@ const input = {
 
 describe("Tistory Browser Edge login", () => {
   beforeEach(() => {
-    browserMocks.close.mockClear();
-    browserMocks.connectOverCDP.mockReset();
+    browserMocks.connect.mockReset();
+    browserMocks.disconnect.mockClear();
   });
 
-  it("fails closed before loading Playwright when no edge-cdp run is assigned", async () => {
+  it("fails closed before loading Puppeteer when no edge-cdp run is assigned", async () => {
     const ctx = mockContext(fetch);
     await expect(loginToTistory(input, ctx)).rejects.toThrow(
       "requires an assigned edge-cdp BrowserSession",
     );
-    expect(browserMocks.connectOverCDP).not.toHaveBeenCalled();
+    expect(browserMocks.connect).not.toHaveBeenCalled();
   });
 
-  it("connects to the Job-scoped CDP WebSocket and closes on HumanTask cancel", async () => {
-    const loginID = { isVisible: vi.fn(async () => true), fill: vi.fn(async () => {}) };
-    const password = { isVisible: vi.fn(async () => true), fill: vi.fn(async () => {}) };
+  it("connects to the Job-scoped CDP WebSocket and disconnects on HumanTask cancel", async () => {
+    const loginID = { isVisible: vi.fn(async () => true) };
+    const password = { isVisible: vi.fn(async () => true) };
     const saveSignedIn = {
       isVisible: vi.fn(async () => false),
-      isChecked: vi.fn(async () => false),
-      uncheck: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => false),
+      click: vi.fn(async () => {}),
     };
+    const loginLocator = { fill: vi.fn(async () => {}) };
+    const passwordLocator = { fill: vi.fn(async () => {}) };
     const page = {
       goto: vi.fn(async () => {}),
-      locator: vi.fn((selector: string) => {
+      $: vi.fn(async (selector: string) => {
         if (selector.includes("loginId")) return loginID;
         if (selector.includes("password")) return password;
         return saveSignedIn;
       }),
-      getByText: vi.fn(),
+      locator: vi.fn((selector: string) => {
+        if (selector.includes("loginId")) return loginLocator;
+        return passwordLocator;
+      }),
     };
     const browserContext = { newPage: vi.fn(async () => page) };
-    browserMocks.connectOverCDP.mockResolvedValue({
-      contexts: () => [browserContext],
-      close: browserMocks.close,
+    browserMocks.connect.mockResolvedValue({
+      defaultBrowserContext: () => browserContext,
+      disconnect: browserMocks.disconnect,
     });
 
     const ctx = mockContext(fetch);
@@ -67,13 +72,13 @@ describe("Tistory Browser Edge login", () => {
     ctx.human.wait = async () => ({ taskId: "task-test", outcome: "cancel" });
 
     await expect(loginToTistory(input, ctx)).rejects.toThrow("Tistory login was canceled");
-    expect(browserMocks.connectOverCDP).toHaveBeenCalledWith(
-      "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
-      { headers: { Authorization: "Bearer job-scoped-fixture" } },
-    );
+    expect(browserMocks.connect).toHaveBeenCalledWith({
+      browserWSEndpoint: "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
+      headers: { Authorization: "Bearer job-scoped-fixture" },
+    });
     expect(page.goto).toHaveBeenCalledWith("https://example.tistory.com/manage/newpost", {
       waitUntil: "domcontentloaded",
     });
-    expect(browserMocks.close).toHaveBeenCalledOnce();
+    expect(browserMocks.disconnect).toHaveBeenCalledOnce();
   });
 });

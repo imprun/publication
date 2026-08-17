@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Page } from "puppeteer-core";
 import {
   TISTORY_CONNECTION_RESOURCE_TYPE,
   TISTORY_PROFILE_PATH,
@@ -21,15 +21,12 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
   if (!ctx.capabilities?.has("edge-cdp/v1")) {
     throw new Error("Tistory login requires an assigned edge-cdp BrowserSession");
   }
-  const { chromium } = await loadPlaywright();
-  const browser = await chromium.connectOverCDP(ctx.capabilities.webSocketEndpoint("edge-cdp"), {
+  const { default: puppeteer } = await loadPuppeteer();
+  const browser = await puppeteer.connect({
+    browserWSEndpoint: ctx.capabilities.webSocketEndpoint("edge-cdp"),
     headers: { ...ctx.capabilities.headers },
   });
-  const context = browser.contexts()[0];
-  if (!context) {
-    await browser.close();
-    throw new Error("The assigned edge-cdp browser has no persistent context");
-  }
+  const context = browser.defaultBrowserContext();
   const page = await context.newPage();
   try {
     await page.goto(`${origin}/manage/newpost`, { waitUntil: "domcontentloaded" });
@@ -61,9 +58,9 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
       throw new Error("Tistory login was canceled");
     }
 
-    await verifyAuthenticated(context, page, origin, host);
+    await verifyAuthenticated(page, origin, host);
     const capturedAt = new Date().toISOString();
-    const storageState = await context.storageState();
+    const storageState = await captureStorageState(context);
     if (!storageState.cookies.some((cookie) => cookie.domain.includes("tistory.com"))) {
       throw new Error("Tistory session cookie was not captured");
     }
@@ -102,44 +99,46 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
       authenticated: true as const,
     };
   } finally {
-    await browser.close();
+    await browser.disconnect();
   }
 }
 
-async function loadPlaywright(): Promise<typeof import("playwright")> {
+async function loadPuppeteer(): Promise<typeof import("puppeteer-core")> {
   // Keep the browser runtime out of Core's static entrypoint verification bundle.
   // The browser worker resolves this declared dependency when the login action runs.
-  return import(["play", "wright"].join(""));
+  return import(["puppeteer", "-core"].join(""));
 }
 
 async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
-  const loginId = page.locator('input[name="loginId"]');
-  if (await loginId.isVisible().catch(() => false)) return;
-  const kakaoButton = page.getByText("카카오계정으로 로그인", { exact: false }).first();
-  if (await kakaoButton.isVisible().catch(() => false)) {
+  if (await isVisible(page, 'input[name="loginId"]')) return;
+  const kakaoButton = await page.$("a.btn_login.link_kakao_id");
+  if (kakaoButton && (await kakaoButton.isVisible().catch(() => false))) {
+    const navigation = page
+      .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
+      .catch(() => null);
     await kakaoButton.click();
-    await page.waitForLoadState("domcontentloaded");
+    await navigation;
   }
 }
 
 async function fillCredentialsIfPresent(page: Page, accountId?: string, password?: string) {
-  const loginId = page.locator('input[name="loginId"]');
-  const passwordInput = page.locator('input[name="password"]');
-  if (accountId && (await loginId.isVisible().catch(() => false))) await loginId.fill(accountId);
-  if (password && (await passwordInput.isVisible().catch(() => false)))
-    await passwordInput.fill(password);
-  const saveSignedIn = page.locator('input[name="saveSignedIn"]');
-  if ((await saveSignedIn.isVisible().catch(() => false)) && (await saveSignedIn.isChecked())) {
-    await saveSignedIn.uncheck();
+  if (accountId && (await isVisible(page, 'input[name="loginId"]'))) {
+    await page.locator('input[name="loginId"]').fill(accountId);
+  }
+  if (password && (await isVisible(page, 'input[name="password"]'))) {
+    await page.locator('input[name="password"]').fill(password);
+  }
+  const saveSignedIn = await page.$('input[name="saveSignedIn"]');
+  if (
+    saveSignedIn &&
+    (await saveSignedIn.isVisible().catch(() => false)) &&
+    (await saveSignedIn.evaluate((element) => (element as HTMLInputElement).checked))
+  ) {
+    await saveSignedIn.click();
   }
 }
 
-async function verifyAuthenticated(
-  context: BrowserContext,
-  page: Page,
-  origin: string,
-  host: string,
-): Promise<void> {
+async function verifyAuthenticated(page: Page, origin: string, host: string): Promise<void> {
   if (page.url().includes("accounts.kakao.com")) {
     throw new Error("Kakao login has not completed");
   }
@@ -147,16 +146,59 @@ async function verifyAuthenticated(
   if (new URL(page.url()).hostname !== host || page.url().includes("/auth/")) {
     throw new Error("Tistory management session could not be verified");
   }
-  const response = await context.request.get(
+  const status = await page.evaluate(
+    async (endpoint) =>
+      (
+        await fetch(endpoint, {
+          credentials: "include",
+          redirect: "manual",
+        })
+      ).status,
     `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`,
-    { maxRedirects: 0 },
   );
-  if (!response.ok()) throw new Error("Tistory management API rejected the captured session");
+  if (status < 200 || status >= 300) {
+    throw new Error("Tistory management API rejected the captured session");
+  }
+}
+
+async function isVisible(page: Page, selector: string): Promise<boolean> {
+  const element = await page.$(selector);
+  return element ? element.isVisible().catch(() => false) : false;
+}
+
+async function captureStorageState(
+  context: BrowserContext,
+): Promise<TistorySession["storageState"]> {
+  const cookies = (await context.cookies()).map((cookie) => ({
+    name: cookie.name,
+    value: cookie.value,
+    domain: cookie.domain,
+    path: cookie.path,
+    expires: cookie.expires,
+    httpOnly: cookie.httpOnly ?? false,
+    secure: cookie.secure,
+    sameSite:
+      cookie.sameSite === "Strict" || cookie.sameSite === "None"
+        ? cookie.sameSite
+        : ("Lax" as const),
+  }));
+  const origins: TistorySession["storageState"]["origins"] = [];
+  const seen = new Set<string>();
+  for (const page of await context.pages()) {
+    const url = new URL(page.url());
+    if (url.protocol !== "https:" || seen.has(url.origin)) continue;
+    const localStorage = await page
+      .evaluate(() => Object.entries(window.localStorage).map(([name, value]) => ({ name, value })))
+      .catch(() => []);
+    origins.push({ origin: url.origin, localStorage });
+    seen.add(url.origin);
+  }
+  return { cookies, origins };
 }
 
 async function captureSessionStorage(context: BrowserContext) {
   const values: Array<{ origin: string; items: Record<string, string> }> = [];
-  for (const page of context.pages()) {
+  for (const page of await context.pages()) {
     const url = new URL(page.url());
     if (url.protocol !== "https:") continue;
     const items = await page

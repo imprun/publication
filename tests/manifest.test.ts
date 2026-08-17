@@ -16,14 +16,14 @@ describe("Windforce manifest", () => {
     expect(manifest).toEqual(app.describe().manifest);
   });
 
-  it("keeps Playwright available at runtime without adding it to Core's static bundle graph", () => {
+  it("keeps Puppeteer available at runtime without adding it to Core's static bundle graph", () => {
     const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
     const bunConfig = readFileSync(join(root, "bunfig.toml"), "utf8");
     const loginSource = readFileSync(join(root, "src", "providers", "tistory", "login.ts"), "utf8");
-    expect(packageJson.dependencies.playwright).toBe("1.60.0");
+    expect(packageJson.dependencies["puppeteer-core"]).toBe("25.7.0");
     expect(bunConfig).toContain('linker = "hoisted"');
     expect(bunConfig).toContain("production = true");
-    expect(loginSource).toContain('import(["play", "wright"].join(""))');
+    expect(loginSource).toContain('import(["puppeteer", "-core"].join(""))');
   });
 
   it("grants session writes only to the browser login action", () => {
