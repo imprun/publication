@@ -34,6 +34,7 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
   let rootClosed = false;
   let popupClosed = false;
   let rawPasswordSent = false;
+  let securityContextMatches = false;
   const kakaoAuthenticate = vi.fn();
   const kakaoTMSPoll = vi.fn();
   const loginID = {
@@ -132,7 +133,15 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
           encryptionPassphrase: "fixture-passphrase",
           loginUrl: "fixture-login-url",
           locale: "ko",
-          userAgentHints: null,
+          botSignals: [44],
+          userAgentHints: {
+            a: "783836",
+            b: "3634",
+            m: "",
+            mo: 0,
+            p: "57696e646f7773",
+            pv: "31352e30",
+          },
         };
       }
       if (argument && typeof argument === "object") {
@@ -143,6 +152,22 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
         if (request.endpoint?.includes("/login/authenticate.json")) {
           kakaoAuthenticate();
           rawPasswordSent = request.body?.password === "fixture-only";
+          const securityContext = request.body?.security_context as
+            | {
+                a?: unknown;
+                b?: { m?: unknown; mo?: unknown };
+                c?: unknown;
+                d?: unknown;
+              }
+            | undefined;
+          securityContextMatches =
+            Array.isArray(securityContext?.a) &&
+            securityContext.a.length === 0 &&
+            typeof securityContext.b?.m === "string" &&
+            typeof securityContext.b?.mo === "number" &&
+            securityContext.c === true &&
+            Array.isArray(securityContext.d) &&
+            securityContext.d.includes(44);
           if (outcome === "automatic-success") {
             return {
               httpStatus: 200,
@@ -260,6 +285,7 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
     kakaoAuthenticate,
     kakaoTMSPoll,
     rawPasswordSent: () => rawPasswordSent,
+    securityContextMatches: () => securityContextMatches,
     humanWait,
     setVariable,
     setResource,
@@ -375,6 +401,7 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.submit.click).not.toHaveBeenCalled();
     expect(harness.kakaoAuthenticate).toHaveBeenCalledOnce();
     expect(harness.rawPasswordSent()).toBe(false);
+    expect(harness.securityContextMatches()).toBe(true);
     expect(harness.humanWait).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
@@ -398,6 +425,7 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.submit.click).not.toHaveBeenCalled();
     expect(harness.kakaoAuthenticate).toHaveBeenCalledOnce();
     expect(harness.rawPasswordSent()).toBe(false);
+    expect(harness.securityContextMatches()).toBe(true);
     expectOwnedTargetsCleaned(harness);
   });
 

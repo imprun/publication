@@ -38,6 +38,7 @@ const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
 interface KakaoLoginBootstrap {
   accountInputName: "loginId" | "loginKey";
+  botSignals: number[];
   csrf: string;
   encryptionPassphrase?: string;
   loginUrl: string;
@@ -46,8 +47,8 @@ interface KakaoLoginBootstrap {
     a?: string;
     b?: string;
     fvl?: Array<{ br: string; vr: string }>;
-    m?: boolean;
-    mo?: string;
+    m?: string;
+    mo?: number;
     p?: string;
     pv?: string;
   } | null;
@@ -236,8 +237,8 @@ async function authenticateKakaoAccount(
     security_context: {
       a: [],
       b: bootstrap.userAgentHints,
-      c: false,
-      d: [],
+      c: bootstrap.botSignals.length > 0,
+      d: bootstrap.botSignals,
     },
     ...(bootstrap.encryptionPassphrase ? { k: true } : {}),
   });
@@ -296,6 +297,10 @@ async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap>
       return null;
     }
 
+    const encodeUserAgentValue = (value: string) =>
+      Array.from(value)
+        .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
+        .join("");
     let userAgentHints: KakaoLoginBootstrap["userAgentHints"] = null;
     const userAgentData = Reflect.get(navigator, "userAgentData") as
       | {
@@ -318,28 +323,48 @@ async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap>
               const brand = Reflect.get(entry, "brand");
               const version = Reflect.get(entry, "version");
               return typeof brand === "string" && typeof version === "string"
-                ? { br: brand, vr: version }
+                ? { br: encodeUserAgentValue(brand), vr: encodeUserAgentValue(version) }
                 : null;
             })
             .filter((entry): entry is { br: string; vr: string } => entry !== null)
         : undefined;
       userAgentHints = {
-        ...(typeof hints.architecture === "string" ? { a: hints.architecture } : {}),
-        ...(typeof hints.bitness === "string" ? { b: hints.bitness } : {}),
+        ...(typeof hints.architecture === "string"
+          ? { a: encodeUserAgentValue(hints.architecture) }
+          : {}),
+        ...(typeof hints.bitness === "string" ? { b: encodeUserAgentValue(hints.bitness) } : {}),
         ...(fullVersionList && fullVersionList.length > 0 ? { fvl: fullVersionList } : {}),
+        ...(typeof hints.model === "string" ? { m: encodeUserAgentValue(hints.model) } : {}),
         ...(typeof Reflect.get(userAgentData, "mobile") === "boolean"
-          ? { m: Reflect.get(userAgentData, "mobile") as boolean }
+          ? { mo: Reflect.get(userAgentData, "mobile") ? 1 : 0 }
           : {}),
-        ...(typeof hints.model === "string" ? { mo: hints.model } : {}),
         ...(typeof Reflect.get(userAgentData, "platform") === "string"
-          ? { p: Reflect.get(userAgentData, "platform") as string }
+          ? { p: encodeUserAgentValue(Reflect.get(userAgentData, "platform") as string) }
           : {}),
-        ...(typeof hints.platformVersion === "string" ? { pv: hints.platformVersion } : {}),
+        ...(typeof hints.platformVersion === "string"
+          ? { pv: encodeUserAgentValue(hints.platformVersion) }
+          : {}),
       };
     }
 
+    const botSignals: number[] = [];
+    const webdriverDetected =
+      navigator.webdriver ||
+      Object.keys(window).some((key) => key.startsWith("cdc_")) ||
+      Object.keys(document).some((key) => key.startsWith("cdc_"));
+    if (webdriverDetected) botSignals.push(11);
+    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+      const hasTouch = "ontouchstart" in window || typeof TouchEvent !== "undefined";
+      if (!hasTouch || navigator.maxTouchPoints === 0) botSignals.push(23);
+    }
+    // The HTTP path intentionally records no pointer positions. Kakao's client
+    // reports that condition as signal 44 when every recorded event is a
+    // synthetic submit-button position; the empty set has the same result.
+    botSignals.push(44);
+
     return {
       accountInputName: normalizedAccountInputName,
+      botSignals,
       csrf,
       ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
         ? { encryptionPassphrase }
