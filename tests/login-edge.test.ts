@@ -21,13 +21,18 @@ const input = {
 
 type HumanOutcome = "success" | "cancel" | "expired" | "authentication-failure";
 
-function createBrowserHarness(outcome: HumanOutcome) {
+function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = false) {
   let currentURL = "about:blank";
   let authenticated = false;
+  let atKakaoLogin = !startsAtTistoryLogin;
   let rootClosed = false;
   let popupClosed = false;
-  const loginID = { isVisible: vi.fn(async () => true) };
-  const password = { isVisible: vi.fn(async () => true) };
+  const loginID = { isVisible: vi.fn(async () => atKakaoLogin) };
+  const password = { isVisible: vi.fn(async () => atKakaoLogin) };
+  const kakaoButton = {
+    isVisible: vi.fn(async () => true),
+    evaluate: vi.fn(async () => "https://kauth.kakao.com/oauth/authorize?client_id=fixture"),
+  };
   const saveSignedIn = {
     isVisible: vi.fn(async () => false),
     evaluate: vi.fn(async () => false),
@@ -68,6 +73,15 @@ function createBrowserHarness(outcome: HumanOutcome) {
   };
   const page = {
     goto: vi.fn(async (url: string) => {
+      if (startsAtTistoryLogin && url.startsWith("https://kauth.kakao.com/oauth/authorize")) {
+        atKakaoLogin = true;
+        currentURL = "https://accounts.kakao.com/login";
+        return;
+      }
+      if (startsAtTistoryLogin && url.includes("/manage/newpost")) {
+        currentURL = "https://www.tistory.com/auth/login";
+        return;
+      }
       currentURL = url.includes("/manage/posts/")
         ? authenticated
           ? url
@@ -78,6 +92,7 @@ function createBrowserHarness(outcome: HumanOutcome) {
     $: vi.fn(async (selector: string) => {
       if (selector.includes("loginId")) return loginID;
       if (selector.includes("password")) return password;
+      if (selector === "a.btn_login.link_kakao_id") return kakaoButton;
       if (selector.includes('button[type="submit"]')) return submit;
       return saveSignedIn;
     }),
@@ -169,6 +184,7 @@ function createBrowserHarness(outcome: HumanOutcome) {
     originalPage,
     loginLocator,
     passwordLocator,
+    kakaoButton,
     submit,
     setVariable,
     setResource,
@@ -277,6 +293,22 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.originalPage.evaluate).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
+    expectOwnedTargetsCleaned(harness);
+  });
+
+  it("navigates to the allowed Kakao login link without an element click", async () => {
+    const harness = createBrowserHarness("success", true);
+
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(harness.kakaoButton.evaluate).toHaveBeenCalledOnce();
+    expect(harness.page.goto).toHaveBeenCalledWith(
+      "https://kauth.kakao.com/oauth/authorize?client_id=fixture",
+      expect.objectContaining({ waitUntil: "domcontentloaded" }),
+    );
+    expect(harness.loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
     expectOwnedTargetsCleaned(harness);
   });
 
