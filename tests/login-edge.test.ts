@@ -32,7 +32,10 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
   let atKakaoLogin = !startsAtTistoryLogin;
   let rootClosed = false;
   let popupClosed = false;
-  const loginID = { isVisible: vi.fn(async () => atKakaoLogin) };
+  const loginID = {
+    isVisible: vi.fn(async () => atKakaoLogin),
+    evaluate: vi.fn(async () => "loginKey"),
+  };
   const password = { isVisible: vi.fn(async () => atKakaoLogin) };
   const kakaoButton = {
     isVisible: vi.fn(async () => true),
@@ -99,7 +102,7 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     }),
     url: vi.fn(() => currentURL),
     $: vi.fn(async (selector: string) => {
-      if (selector.includes("loginId")) return loginID;
+      if (selector.includes("loginId") || selector.includes("loginKey")) return loginID;
       if (selector.includes("password")) return password;
       if (selector === "a.btn_login.link_kakao_id") return kakaoButton;
       if (selector.includes('button[type="submit"]')) return submit;
@@ -108,13 +111,13 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     waitForNavigation: vi.fn(async () => null),
     waitForSelector: vi.fn(async (selector: string) => {
       if (selector.includes("a.btn_login.link_kakao_id") && !atKakaoLogin) return kakaoButton;
-      if (selector.includes("loginId")) return loginID;
+      if (selector.includes("loginId") || selector.includes("loginKey")) return loginID;
       if (selector.includes("password")) return password;
       if (selector.includes('button[type="submit"]')) return submit;
       return null;
     }),
     locator: vi.fn((selector: string) => {
-      if (selector.includes("loginId")) return loginLocator;
+      if (selector.includes("loginId") || selector.includes("loginKey")) return loginLocator;
       return passwordLocator;
     }),
     evaluate: vi.fn(async (pageFunction: unknown, argument?: string) => {

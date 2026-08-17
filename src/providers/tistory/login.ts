@@ -32,6 +32,7 @@ const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 const LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
+const KAKAO_ACCOUNT_INPUT_SELECTOR = 'input[name="loginKey"], input[name="loginId"]';
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
@@ -199,12 +200,12 @@ async function loadPuppeteer(): Promise<typeof import("puppeteer-core")> {
 
 async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
   await page
-    .waitForSelector('input[name="loginId"], a.btn_login.link_kakao_id', {
+    .waitForSelector(`${KAKAO_ACCOUNT_INPUT_SELECTOR}, a.btn_login.link_kakao_id`, {
       visible: true,
       timeout: LOGIN_FORM_READY_TIMEOUT_MS,
     })
     .catch(() => null);
-  if (await isVisible(page, 'input[name="loginId"]')) return;
+  if (await isVisible(page, KAKAO_ACCOUNT_INPUT_SELECTOR)) return;
   const kakaoButton = await page.$("a.btn_login.link_kakao_id");
   if (!kakaoButton || !(await kakaoButton.isVisible().catch(() => false))) return;
 
@@ -234,13 +235,17 @@ function parseKakaoLoginDestination(href: string, baseURL: string): URL {
 
 async function fillCredentials(page: Page, accountId: string, password: string) {
   const accountInput = await page
-    .waitForSelector('input[name="loginId"]', {
+    .waitForSelector(KAKAO_ACCOUNT_INPUT_SELECTOR, {
       visible: true,
       timeout: LOGIN_FORM_READY_TIMEOUT_MS,
     })
     .catch(() => null);
   if (!accountInput) {
     throw new Error("Kakao account input was not available for automatic login");
+  }
+  const accountInputName = await accountInput.evaluate((element) => element.getAttribute("name"));
+  if (accountInputName !== "loginKey" && accountInputName !== "loginId") {
+    throw new Error("Kakao account input was not recognized for automatic login");
   }
   const passwordInput = await page
     .waitForSelector('input[name="password"]', {
@@ -251,7 +256,7 @@ async function fillCredentials(page: Page, accountId: string, password: string) 
   if (!passwordInput) {
     throw new Error("Kakao password input was not available for automatic login");
   }
-  await page.locator('input[name="loginId"]').fill(accountId);
+  await page.locator(`input[name="${accountInputName}"]`).fill(accountId);
   await page.locator('input[name="password"]').fill(password);
   const saveSignedIn = await page.$('input[name="saveSignedIn"]');
   if (
