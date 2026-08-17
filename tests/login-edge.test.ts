@@ -39,7 +39,10 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
   const password = { isVisible: vi.fn(async () => atKakaoLogin) };
   const kakaoButton = {
     isVisible: vi.fn(async () => true),
-    evaluate: vi.fn(async () => "https://kauth.kakao.com/oauth/authorize?client_id=fixture"),
+    evaluate: vi.fn(async () => {
+      atKakaoLogin = true;
+      currentURL = "https://accounts.kakao.com/login/";
+    }),
   };
   const saveSignedIn = {
     isVisible: vi.fn(async () => false),
@@ -85,11 +88,6 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
   };
   const page = {
     goto: vi.fn(async (url: string) => {
-      if (startsAtTistoryLogin && url.startsWith("https://kauth.kakao.com/oauth/authorize")) {
-        atKakaoLogin = true;
-        currentURL = "https://accounts.kakao.com/login";
-        return;
-      }
       if (startsAtTistoryLogin && url.includes("/manage/newpost")) {
         currentURL = "https://www.tistory.com/auth/login";
         return;
@@ -347,7 +345,7 @@ describe("Tistory Browser Edge login", () => {
     expectOwnedTargetsCleaned(harness);
   });
 
-  it("navigates to the allowed Kakao login link without an element click", async () => {
+  it("uses the Tistory DOM login handler without Puppeteer's element click", async () => {
     const harness = createBrowserHarness("success", true);
 
     await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
@@ -355,9 +353,9 @@ describe("Tistory Browser Edge login", () => {
     });
 
     expect(harness.kakaoButton.evaluate).toHaveBeenCalledOnce();
-    expect(harness.page.goto).toHaveBeenCalledWith(
-      "https://kauth.kakao.com/oauth/authorize?client_id=fixture",
-      expect.objectContaining({ waitUntil: "domcontentloaded" }),
+    expect(harness.page.goto).not.toHaveBeenCalledWith(
+      expect.stringContaining("kauth.kakao.com"),
+      expect.anything(),
     );
     expect(harness.loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
     expectOwnedTargetsCleaned(harness);
