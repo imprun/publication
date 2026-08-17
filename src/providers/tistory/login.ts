@@ -26,6 +26,7 @@ const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
 const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
+const KAKAO_SDK_READY_TIMEOUT_MS = 10_000;
 const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
 const KAKAO_AUTHENTICATE_ENDPOINT = "/api/v2/login/authenticate.json";
@@ -208,6 +209,26 @@ async function startKakaoAuthorization(
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
 
+  await page
+    .waitForFunction(
+      () => {
+        const kakao = Reflect.get(window, "Kakao");
+        if (!kakao || typeof kakao !== "object") return false;
+        const auth = Reflect.get(kakao, "Auth");
+        const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
+        const isInitialized = Reflect.get(kakao, "isInitialized");
+        return (
+          typeof authorize === "function" &&
+          typeof isInitialized === "function" &&
+          isInitialized.call(kakao) === true
+        );
+      },
+      { timeout: KAKAO_SDK_READY_TIMEOUT_MS },
+    )
+    .catch(() => {
+      throw new Error("Tistory Kakao SDK did not initialize before the login deadline");
+    });
+
   const authState = await page
     .evaluate(
       async ({ stateEndpoint, redirectUrl }) => {
@@ -242,17 +263,21 @@ async function startKakaoAuthorization(
     waitUntil: "domcontentloaded",
     timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
   });
-  await page.evaluate((state) => {
-    const kakao = Reflect.get(window, "Kakao");
-    const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
-    const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
-    if (typeof authorize !== "function") throw new Error("Kakao authorize API is unavailable");
-    authorize.call(auth, {
-      redirectUri: `${window.location.origin}/auth/kakao/redirect`,
-      state,
-      prompt: "select_account",
+  await page
+    .evaluate((state) => {
+      const kakao = Reflect.get(window, "Kakao");
+      const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
+      const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
+      if (typeof authorize !== "function") throw new Error("Kakao authorize API is unavailable");
+      authorize.call(auth, {
+        redirectUri: `${window.location.origin}/auth/kakao/redirect`,
+        state,
+        prompt: "select_account",
+      });
+    }, authState.state)
+    .catch(() => {
+      throw new Error("Tistory Kakao SDK authorization failed");
     });
-  }, authState.state);
   await navigation;
 }
 
