@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
 import type { Browser, BrowserContext, Page, Target } from "puppeteer-core";
 import {
@@ -28,8 +28,37 @@ const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 const LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
 const KAKAO_ACCOUNT_INPUT_SELECTOR = 'input[name="loginKey"], input[name="loginId"]';
+const KAKAO_AUTHENTICATE_ENDPOINT = "/api/v2/login/authenticate.json";
+const KAKAO_VERIFY_TMS_ENDPOINT = "/api/v2/two_step_verification/verify_tms_for_login.json";
+const KAKAO_SUCCESS = 0;
+const KAKAO_NETWORK_ERROR = -4;
+const KAKAO_TWO_STEP_VERIFICATION_REQUIRED = -451;
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
+
+interface KakaoLoginBootstrap {
+  accountInputName: "loginId" | "loginKey";
+  csrf: string;
+  encryptionPassphrase?: string;
+  loginUrl: string;
+  locale: string;
+  userAgentHints: {
+    a?: string;
+    b?: string;
+    fvl?: Array<{ br: string; vr: string }>;
+    m?: boolean;
+    mo?: string;
+    p?: string;
+    pv?: string;
+  } | null;
+}
+
+interface KakaoHTTPResponse {
+  httpStatus: number;
+  status?: number;
+  token?: string;
+  continueUrl?: string;
+}
 
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
   const host = normalizeTistoryHost(input.blogHost);
@@ -111,10 +140,10 @@ async function performLogin(
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
   await openKakaoLoginIfNeeded(page);
-  await fillCredentials(page, input.accountId, input.password);
-  await submitCredentials(page);
+  const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+  await authenticateKakaoAccount(page, input.accountId, input.password, deadline);
 
-  await waitForAuthenticatedSession(page, origin, host);
+  await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();
   const storageState = await captureStorageState(page, origin);
   if (
@@ -185,7 +214,49 @@ async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
   await navigation;
 }
 
-async function fillCredentials(page: Page, accountId: string, password: string) {
+async function authenticateKakaoAccount(
+  page: Page,
+  accountId: string,
+  password: string,
+  deadline: number,
+): Promise<void> {
+  const bootstrap = await readKakaoLoginBootstrap(page);
+  const encryptedPassword = bootstrap.encryptionPassphrase
+    ? encryptKakaoPassword(password, bootstrap.encryptionPassphrase)
+    : password;
+  const response = await callKakaoJSON(page, KAKAO_AUTHENTICATE_ENDPOINT, {
+    _csrf: bootstrap.csrf,
+    loginId: accountId,
+    loginKey: accountId,
+    password: encryptedPassword,
+    staySignedIn: false,
+    saveSignedIn: false,
+    loginUrl: bootstrap.loginUrl,
+    lang: bootstrap.locale,
+    security_context: {
+      a: [],
+      b: bootstrap.userAgentHints,
+      c: false,
+      d: [],
+    },
+    ...(bootstrap.encryptionPassphrase ? { k: true } : {}),
+  });
+
+  if (response.status === KAKAO_SUCCESS && response.continueUrl) {
+    await navigateToKakaoContinuation(page, response.continueUrl, deadline);
+    return;
+  }
+  if (response.status !== KAKAO_TWO_STEP_VERIFICATION_REQUIRED || !response.token) {
+    throw new Error(
+      kakaoResponseError("Kakao credential authentication was not accepted", response),
+    );
+  }
+
+  const continueUrl = await waitForKakaoTMSApproval(page, bootstrap.csrf, response.token, deadline);
+  await navigateToKakaoContinuation(page, continueUrl, deadline);
+}
+
+async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap> {
   const accountInput = await page
     .waitForSelector(KAKAO_ACCOUNT_INPUT_SELECTOR, {
       visible: true,
@@ -197,58 +268,200 @@ async function fillCredentials(page: Page, accountId: string, password: string) 
       `Kakao account input was not available for automatic login at ${safePageLocation(page.url())}`,
     );
   }
-  const accountInputName = await accountInput.evaluate((element) => element.getAttribute("name"));
-  if (accountInputName !== "loginKey" && accountInputName !== "loginId") {
-    throw new Error("Kakao account input was not recognized for automatic login");
-  }
-  const passwordInput = await page
-    .waitForSelector('input[name="password"]', {
-      visible: true,
-      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
-    })
-    .catch(() => null);
-  if (!passwordInput) {
-    throw new Error(
-      `Kakao password input was not available for automatic login at ${safePageLocation(page.url())}`,
+  const bootstrap = await page.evaluate(async () => {
+    const accountInput = document.querySelector<HTMLInputElement>(
+      'input[name="loginKey"], input[name="loginId"]',
     );
+    const accountInputName = accountInput?.name;
+    if (accountInputName !== "loginId" && accountInputName !== "loginKey") return null;
+    const normalizedAccountInputName: "loginId" | "loginKey" = accountInputName;
+    const nextDataText = document.querySelector("#__NEXT_DATA__")?.textContent;
+    if (!nextDataText) return null;
+    const nextData = JSON.parse(nextDataText) as {
+      props?: {
+        pageProps?: {
+          pageContext?: {
+            commonContext?: { _csrf?: unknown; locale?: unknown; p?: unknown };
+            context?: { loginUrl?: unknown };
+          };
+        };
+      };
+    };
+    const pageContext = nextData.props?.pageProps?.pageContext;
+    const csrf = pageContext?.commonContext?._csrf;
+    const locale = pageContext?.commonContext?.locale;
+    const encryptionPassphrase = pageContext?.commonContext?.p;
+    const loginUrl = pageContext?.context?.loginUrl;
+    if (typeof csrf !== "string" || typeof locale !== "string" || typeof loginUrl !== "string") {
+      return null;
+    }
+
+    let userAgentHints: KakaoLoginBootstrap["userAgentHints"] = null;
+    const userAgentData = Reflect.get(navigator, "userAgentData") as
+      | {
+          getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+        }
+      | undefined;
+    if (userAgentData?.getHighEntropyValues) {
+      const hints = await userAgentData.getHighEntropyValues([
+        "architecture",
+        "bitness",
+        "fullVersionList",
+        "model",
+        "platform",
+        "platformVersion",
+      ]);
+      const fullVersionList = Array.isArray(hints.fullVersionList)
+        ? hints.fullVersionList
+            .map((entry) => {
+              if (!entry || typeof entry !== "object") return null;
+              const brand = Reflect.get(entry, "brand");
+              const version = Reflect.get(entry, "version");
+              return typeof brand === "string" && typeof version === "string"
+                ? { br: brand, vr: version }
+                : null;
+            })
+            .filter((entry): entry is { br: string; vr: string } => entry !== null)
+        : undefined;
+      userAgentHints = {
+        ...(typeof hints.architecture === "string" ? { a: hints.architecture } : {}),
+        ...(typeof hints.bitness === "string" ? { b: hints.bitness } : {}),
+        ...(fullVersionList && fullVersionList.length > 0 ? { fvl: fullVersionList } : {}),
+        ...(typeof Reflect.get(userAgentData, "mobile") === "boolean"
+          ? { m: Reflect.get(userAgentData, "mobile") as boolean }
+          : {}),
+        ...(typeof hints.model === "string" ? { mo: hints.model } : {}),
+        ...(typeof Reflect.get(userAgentData, "platform") === "string"
+          ? { p: Reflect.get(userAgentData, "platform") as string }
+          : {}),
+        ...(typeof hints.platformVersion === "string" ? { pv: hints.platformVersion } : {}),
+      };
+    }
+
+    return {
+      accountInputName: normalizedAccountInputName,
+      csrf,
+      ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
+        ? { encryptionPassphrase }
+        : {}),
+      loginUrl,
+      locale,
+      userAgentHints,
+    };
+  });
+  if (!bootstrap) {
+    throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
   }
-  await page.locator(`input[name="${accountInputName}"]`).fill(accountId);
-  await page.locator('input[name="password"]').fill(password);
-  const saveSignedIn = await page.$('input[name="saveSignedIn"]');
+  return bootstrap;
+}
+
+async function waitForKakaoTMSApproval(
+  page: Page,
+  csrf: string,
+  token: string,
+  deadline: number,
+): Promise<string> {
+  while (Date.now() < deadline) {
+    const response = await callKakaoJSON(page, KAKAO_VERIFY_TMS_ENDPOINT, {
+      _csrf: csrf,
+      token,
+      isRememberBrowser: false,
+    });
+    if (response.status === KAKAO_SUCCESS && response.continueUrl) return response.continueUrl;
+    if (
+      response.status !== KAKAO_TWO_STEP_VERIFICATION_REQUIRED &&
+      response.status !== KAKAO_NETWORK_ERROR
+    ) {
+      throw new Error(kakaoResponseError("Kakao two-step verification was not accepted", response));
+    }
+    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+  }
+  throw new Error("Kakao two-step verification did not complete before the login deadline");
+}
+
+async function callKakaoJSON(
+  page: Page,
+  endpoint: string,
+  body: Record<string, unknown>,
+): Promise<KakaoHTTPResponse> {
+  return page.evaluate(
+    async ({ endpoint, body }) => {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!payload || typeof payload !== "object") return { httpStatus: response.status };
+      const status = Reflect.get(payload, "status");
+      const token = Reflect.get(payload, "token");
+      const continueUrl = Reflect.get(payload, "continueUrl");
+      return {
+        httpStatus: response.status,
+        ...(typeof status === "number" ? { status } : {}),
+        ...(typeof token === "string" ? { token } : {}),
+        ...(typeof continueUrl === "string" ? { continueUrl } : {}),
+      };
+    },
+    { endpoint, body },
+  );
+}
+
+async function navigateToKakaoContinuation(
+  page: Page,
+  rawContinueUrl: string,
+  deadline: number,
+): Promise<void> {
+  let continueUrl: URL;
+  try {
+    continueUrl = new URL(rawContinueUrl, "https://accounts.kakao.com/");
+  } catch {
+    throw new Error("Kakao login returned an invalid continuation URL");
+  }
   if (
-    saveSignedIn &&
-    (await saveSignedIn.isVisible().catch(() => false)) &&
-    (await saveSignedIn.evaluate((element) => (element as HTMLInputElement).checked))
+    continueUrl.protocol !== "https:" ||
+    !["accounts.kakao.com", "kauth.kakao.com", "www.tistory.com"].includes(continueUrl.hostname)
   ) {
-    await saveSignedIn.click();
+    throw new Error("Kakao login returned an untrusted continuation URL");
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
+  try {
+    await page.goto(continueUrl.href, {
+      waitUntil: "domcontentloaded",
+      timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
+    });
+  } catch {
+    throw new Error(`Kakao login continuation failed at ${safePageLocation(continueUrl.href)}`);
   }
 }
 
-async function submitCredentials(page: Page) {
-  const submit = await page
-    .waitForSelector('button[type="submit"]', {
-      visible: true,
-      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
-    })
-    .catch(() => null);
-  if (!submit) {
-    throw new Error(
-      `Kakao login submit control was not available for automatic login at ${safePageLocation(page.url())}`,
-    );
+function kakaoResponseError(message: string, response: KakaoHTTPResponse): string {
+  const status = response.status ?? "unknown";
+  return `${message} (status ${status}, HTTP ${response.httpStatus})`;
+}
+
+function encryptKakaoPassword(value: string, passphrase: string): string {
+  const salt = randomBytes(8);
+  const password = Buffer.from(passphrase, "utf8");
+  let derived = Buffer.alloc(0);
+  let previous = Buffer.alloc(0);
+  while (derived.length < 48) {
+    previous = createHash("md5").update(previous).update(password).update(salt).digest();
+    derived = Buffer.concat([derived, previous]);
   }
-  const navigation = page
-    .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
-    .catch(() => null);
-  await submit.click();
-  await navigation;
+  const cipher = createCipheriv("aes-256-cbc", derived.subarray(0, 32), derived.subarray(32, 48));
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return Buffer.concat([Buffer.from("Salted__"), salt, encrypted]).toString("base64");
 }
 
 async function waitForAuthenticatedSession(
   page: Page,
   origin: string,
   host: string,
+  deadline: number,
 ): Promise<void> {
-  const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
   const managementURL = `${origin}/manage/posts/`;
   const apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`;
 
