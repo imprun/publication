@@ -9,37 +9,31 @@ import {
 
 describe("Tistory login E2E CLI contract", () => {
   it("accepts an exact local credential document", () => {
-    expect(parseCredentialsJson('{"accountId":" user@example.com ","password":"secret"}')).toEqual({
+    expect(parseCredentialsJson('{"accountId":" user@example.com "}')).toEqual({
       accountId: "user@example.com",
-      password: "secret",
     });
-    expect(() =>
-      parseCredentialsJson('{"accountId":"user","password":"secret","extra":true}'),
-    ).toThrow("only accountId and password");
+    expect(() => parseCredentialsJson('{"accountId":"user","extra":true}')).toThrow(
+      "only accountId",
+    );
   });
 
   it("accepts the existing local env variable names", () => {
     expect(
-      parseCredentialsEnv("KAKAO_LOGINID=user@example.com\nKAKAO_LOGINPWD='secret'\n"),
+      parseCredentialsEnv("KAKAO_LOGINID=user@example.com\nKAKAO_LOGINPWD='ignored'\n"),
     ).toEqual({
       accountId: "user@example.com",
-      password: "secret",
     });
   });
 
-  it("provisions app-scoped Secret Variables and binds only references", () => {
-    const variables = credentialVariableRequests({ accountId: "user", password: "secret" });
-    expect(variables).toMatchObject([
-      { app_key: "publication", is_secret: true, value: "user" },
-      { app_key: "publication", is_secret: true, value: "secret" },
-    ]);
+  it("provisions the account hint as an app-scoped Secret Variable", () => {
+    const variables = credentialVariableRequests({ accountId: "user" });
+    expect(variables).toMatchObject([{ app_key: "publication", is_secret: true, value: "user" }]);
     expect(loginInputConfigRequest()).toEqual({
       action_key: "connection.login",
       config: {
         accountId: "$var@app:connections/tistory/default/account-id",
-        password: "$var@app:connections/tistory/default/password",
       },
-      locked_keys: ["accountId", "password"],
+      locked_keys: ["accountId"],
     });
   });
 

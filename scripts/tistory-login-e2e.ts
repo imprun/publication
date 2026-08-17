@@ -2,12 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import {
-  TISTORY_ACCOUNT_ID_PATH,
-  TISTORY_ACCOUNT_ID_REFERENCE,
-  TISTORY_PASSWORD_PATH,
-  TISTORY_PASSWORD_REFERENCE,
-} from "../src/config.js";
+import { TISTORY_ACCOUNT_ID_PATH, TISTORY_ACCOUNT_ID_REFERENCE } from "../src/config.js";
 import { normalizeTistoryHost } from "../src/providers/tistory/host.js";
 
 const APP_KEY = "publication";
@@ -15,7 +10,6 @@ const ACTION_KEY = "connection.login";
 
 export interface LoginCredentials {
   accountId: string;
-  password: string;
 }
 
 interface CliOptions {
@@ -37,16 +31,13 @@ export function parseCredentialsJson(source: string): LoginCredentials {
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (keys.join(",") !== "accountId,password") {
-    throw new Error("credentials JSON must contain only accountId and password");
+  if (keys.join(",") !== "accountId") {
+    throw new Error("credentials JSON must contain only accountId");
   }
   if (typeof record.accountId !== "string" || record.accountId.trim().length === 0) {
     throw new Error("credentials accountId must be a non-empty string");
   }
-  if (typeof record.password !== "string" || record.password.length === 0) {
-    throw new Error("credentials password must be a non-empty string");
-  }
-  return { accountId: record.accountId.trim(), password: record.password };
+  return { accountId: record.accountId.trim() };
 }
 
 export function parseCredentialsEnv(source: string): LoginCredentials {
@@ -68,10 +59,8 @@ export function parseCredentialsEnv(source: string): LoginCredentials {
     values.set(key, value);
   }
   const accountId = values.get("KAKAO_LOGINID");
-  const password = values.get("KAKAO_LOGINPWD");
   if (!accountId?.trim()) throw new Error("KAKAO_LOGINID is missing from the env file");
-  if (!password) throw new Error("KAKAO_LOGINPWD is missing from the env file");
-  return { accountId: accountId.trim(), password };
+  return { accountId: accountId.trim() };
 }
 
 export function credentialVariableRequests(credentials: LoginCredentials) {
@@ -83,13 +72,6 @@ export function credentialVariableRequests(credentials: LoginCredentials) {
       app_key: APP_KEY,
       description: "Kakao account identifier for Tistory login",
     },
-    {
-      path: TISTORY_PASSWORD_PATH,
-      value: credentials.password,
-      is_secret: true,
-      app_key: APP_KEY,
-      description: "Kakao account password for Tistory login",
-    },
   ];
 }
 
@@ -98,9 +80,8 @@ export function loginInputConfigRequest() {
     action_key: ACTION_KEY,
     config: {
       accountId: TISTORY_ACCOUNT_ID_REFERENCE,
-      password: TISTORY_PASSWORD_REFERENCE,
     },
-    locked_keys: ["accountId", "password"],
+    locked_keys: ["accountId"],
   };
 }
 
@@ -237,8 +218,7 @@ async function main() {
   const runInput = loginRunInput(options.blogHost);
   await provisionCredentials(options.context, credentials);
   credentials.accountId = "";
-  credentials.password = "";
-  console.log("Kakao credentials were stored as App-scoped Secret Variables.");
+  console.log("The Kakao account hint was stored as an App-scoped Secret Variable.");
   console.log("The InputConfig contains only $var references; Run input contains only blogHost.");
   if (options.configureOnly) return;
 
