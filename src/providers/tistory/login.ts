@@ -31,6 +31,7 @@ const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
 const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
+const LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
@@ -197,6 +198,12 @@ async function loadPuppeteer(): Promise<typeof import("puppeteer-core")> {
 }
 
 async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
+  await page
+    .waitForSelector('input[name="loginId"], a.btn_login.link_kakao_id', {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
   if (await isVisible(page, 'input[name="loginId"]')) return;
   const kakaoButton = await page.$("a.btn_login.link_kakao_id");
   if (!kakaoButton || !(await kakaoButton.isVisible().catch(() => false))) return;
@@ -226,10 +233,22 @@ function parseKakaoLoginDestination(href: string, baseURL: string): URL {
 }
 
 async function fillCredentials(page: Page, accountId: string, password: string) {
-  if (!(await isVisible(page, 'input[name="loginId"]'))) {
+  const accountInput = await page
+    .waitForSelector('input[name="loginId"]', {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  if (!accountInput) {
     throw new Error("Kakao account input was not available for automatic login");
   }
-  if (!(await isVisible(page, 'input[name="password"]'))) {
+  const passwordInput = await page
+    .waitForSelector('input[name="password"]', {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  if (!passwordInput) {
     throw new Error("Kakao password input was not available for automatic login");
   }
   await page.locator('input[name="loginId"]').fill(accountId);
@@ -245,8 +264,13 @@ async function fillCredentials(page: Page, accountId: string, password: string) 
 }
 
 async function submitCredentials(page: Page) {
-  const submit = await page.$('button[type="submit"]');
-  if (!submit || !(await submit.isVisible().catch(() => false))) {
+  const submit = await page
+    .waitForSelector('button[type="submit"]', {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  if (!submit) {
     throw new Error("Kakao login submit control was not available for automatic login");
   }
   const navigation = page
