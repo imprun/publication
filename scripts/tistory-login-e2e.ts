@@ -1,27 +1,75 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { TISTORY_ACCOUNT_ID_PATH, TISTORY_ACCOUNT_ID_REFERENCE } from "../src/config.js";
+import {
+  TISTORY_ACCOUNT_ID_PATH,
+  TISTORY_ACCOUNT_ID_REFERENCE,
+  TISTORY_PASSWORD_PATH,
+  TISTORY_PASSWORD_REFERENCE,
+} from "../src/config.js";
 import { normalizeTistoryHost } from "../src/providers/tistory/host.js";
 
 const APP_KEY = "publication";
-const ACTION_KEY = "connection.login";
+const LOGIN_ACTION = "connection.login";
+const STATUS_ACTION = "connection.status";
+const PREPARE_ACTION = "post.prepare";
+const PUBLISH_ACTION = "post.publish";
+const DEFAULT_MARKDOWN_PATH = resolve("examples", "tistory-e2e.md");
 
 export interface LoginCredentials {
   accountId: string;
+  password: string;
+}
+
+export interface ExampleDraft {
+  provider: "tistory";
+  connectionId: "default";
+  title: string;
+  markdown: string;
+  tags: string[];
+  categoryId: number;
 }
 
 interface CliOptions {
   context: string;
   blogHost: string;
   credentialsSource: { kind: "json"; path: string } | { kind: "env"; path: string };
+  markdownPath: string;
   configureOnly: boolean;
 }
 
 interface RunView {
   run_id: string;
   state: string;
+}
+
+interface HumanTaskView {
+  id: string;
+  run_id: string;
+  title: string;
+  expires_at: string;
+}
+
+interface HumanTaskList {
+  items: HumanTaskView[];
+}
+
+interface PrepareResult {
+  draftHash: string;
+}
+
+interface ConnectionResult {
+  authenticated: true;
+  blogHost: string;
+}
+
+interface PostResult {
+  postId: string;
+  entryUrl: string;
+  visibility: "private" | "public";
+  representativeImageApplied: boolean;
 }
 
 export function parseCredentialsJson(source: string): LoginCredentials {
@@ -31,13 +79,16 @@ export function parseCredentialsJson(source: string): LoginCredentials {
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (keys.join(",") !== "accountId") {
-    throw new Error("credentials JSON must contain only accountId");
+  if (keys.join(",") !== "accountId,password") {
+    throw new Error("credentials JSON must contain only accountId and password");
   }
   if (typeof record.accountId !== "string" || record.accountId.trim().length === 0) {
     throw new Error("credentials accountId must be a non-empty string");
   }
-  return { accountId: record.accountId.trim() };
+  if (typeof record.password !== "string" || record.password.length === 0) {
+    throw new Error("credentials password must be a non-empty string");
+  }
+  return { accountId: record.accountId.trim(), password: record.password };
 }
 
 export function parseCredentialsEnv(source: string): LoginCredentials {
@@ -59,8 +110,10 @@ export function parseCredentialsEnv(source: string): LoginCredentials {
     values.set(key, value);
   }
   const accountId = values.get("KAKAO_LOGINID");
+  const password = values.get("KAKAO_LOGINPWD");
   if (!accountId?.trim()) throw new Error("KAKAO_LOGINID is missing from the env file");
-  return { accountId: accountId.trim() };
+  if (!password) throw new Error("KAKAO_LOGINPWD is missing from the env file");
+  return { accountId: accountId.trim(), password };
 }
 
 export function credentialVariableRequests(credentials: LoginCredentials) {
@@ -72,21 +125,45 @@ export function credentialVariableRequests(credentials: LoginCredentials) {
       app_key: APP_KEY,
       description: "Kakao account identifier for Tistory login",
     },
+    {
+      path: TISTORY_PASSWORD_PATH,
+      value: credentials.password,
+      is_secret: true,
+      app_key: APP_KEY,
+      description: "Kakao account password for Tistory login",
+    },
   ];
 }
 
 export function loginInputConfigRequest() {
   return {
-    action_key: ACTION_KEY,
+    action_key: LOGIN_ACTION,
     config: {
       accountId: TISTORY_ACCOUNT_ID_REFERENCE,
+      password: TISTORY_PASSWORD_REFERENCE,
     },
-    locked_keys: ["accountId"],
+    locked_keys: ["accountId", "password"],
   };
 }
 
 export function loginRunInput(blogHost: string) {
   return { blogHost: normalizeTistoryHost(blogHost) };
+}
+
+export function createExampleDraft(markdown: string, now = new Date()): ExampleDraft {
+  if (!markdown.trim()) throw new Error("example Markdown must not be empty");
+  return {
+    provider: "tistory",
+    connectionId: "default",
+    title: `[publication E2E] ${now.toISOString()}`,
+    markdown,
+    tags: ["publication-e2e", "markdown"],
+    categoryId: 0,
+  };
+}
+
+export function privatePublishInput(draft: ExampleDraft, draftHash: string) {
+  return { ...draft, draftHash, visibility: "private" as const };
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -102,7 +179,8 @@ function parseArgs(argv: string[]): CliOptions {
       argument !== "--context" &&
       argument !== "--blog-host" &&
       argument !== "--credentials" &&
-      argument !== "--env"
+      argument !== "--env" &&
+      argument !== "--markdown"
     ) {
       throw new Error(`unknown argument: ${argument ?? ""}`);
     }
@@ -117,13 +195,19 @@ function parseArgs(argv: string[]): CliOptions {
   const envPath = values.get("--env");
   if (!context || !blogHost || Boolean(credentialsPath) === Boolean(envPath)) {
     throw new Error(
-      "usage: npm run e2e:tistory-login -- --context <name> --blog-host <host> (--credentials <json-file> | --env <env-file>) [--configure-only]",
+      "usage: npm run e2e:tistory-login -- --context <name> --blog-host <host> (--credentials <json-file> | --env <env-file>) [--markdown <md-file>] [--configure-only]",
     );
   }
   const credentialsSource = credentialsPath
     ? ({ kind: "json", path: credentialsPath } as const)
     : ({ kind: "env", path: envPath as string } as const);
-  return { context, blogHost, credentialsSource, configureOnly };
+  return {
+    context,
+    blogHost,
+    credentialsSource,
+    markdownPath: values.get("--markdown") ?? DEFAULT_MARKDOWN_PATH,
+    configureOnly,
+  };
 }
 
 async function imprunJson<T>(
@@ -177,31 +261,84 @@ async function provisionCredentials(context: string, credentials: LoginCredentia
   );
 }
 
-async function createLoginRun(context: string, blogHost: string): Promise<RunView> {
+async function createRun(context: string, action: string, input: unknown): Promise<RunView> {
   return imprunJson<RunView>(
     context,
     [
       "run",
       "create",
       APP_KEY,
-      ACTION_KEY,
+      action,
       "--input-file",
       "-",
       "--idempotency-key",
-      `publication-tistory-login-e2e-${randomUUID()}`,
+      `publication-e2e-${action}-${randomUUID()}`,
     ],
-    loginRunInput(blogHost),
+    input,
   );
 }
 
-async function waitForTerminalRun(context: string, runId: string): Promise<RunView> {
-  const deadline = Date.now() + 11 * 60 * 1000;
+function isSuccessfulRun(run: RunView): boolean {
+  return run.state === "succeeded" || run.state === "success";
+}
+
+async function pendingHumanTask(
+  context: string,
+  runId: string,
+): Promise<HumanTaskView | undefined> {
+  const list = await imprunJson<HumanTaskList>(context, [
+    "api",
+    "human-tasks?state=pending&limit=100",
+  ]);
+  return list.items.find((candidate) => candidate.run_id === runId);
+}
+
+async function waitForTerminalRun(
+  context: string,
+  runId: string,
+  timeoutMs: number,
+  label: string,
+  announceApproval = false,
+): Promise<RunView> {
+  const deadline = Date.now() + timeoutMs;
+  let announcedTaskId: string | undefined;
   while (Date.now() < deadline) {
     const run = await imprunJson<RunView>(context, ["run", "show", runId]);
     if (run.state !== "queued" && run.state !== "running") return run;
+    if (announceApproval) {
+      const task = await pendingHumanTask(context, runId).catch(() => undefined);
+      if (task && task.id !== announcedTaskId) {
+        announcedTaskId = task.id;
+        console.log(
+          `HumanTask ${task.id}: ${task.title}. Approve it in Imprun Cloud before ${task.expires_at}.`,
+        );
+      }
+    }
     await sleep(1_000);
   }
-  throw new Error(`timed out waiting for automatic login Run ${runId}`);
+  throw new Error(`timed out waiting for ${label} Run ${runId}`);
+}
+
+async function runAction<T>(
+  context: string,
+  action: string,
+  input: unknown,
+  timeoutMs: number,
+  announceApproval = false,
+): Promise<{ run: RunView; result: T }> {
+  const created = await createRun(context, action, input);
+  const terminal = await waitForTerminalRun(
+    context,
+    created.run_id,
+    timeoutMs,
+    action,
+    announceApproval,
+  );
+  if (!isSuccessfulRun(terminal)) {
+    throw new Error(`${action} Run ${terminal.run_id} ended in state ${terminal.state}`);
+  }
+  const result = await imprunJson<T>(context, ["run", "result", terminal.run_id]);
+  return { run: terminal, result };
 }
 
 function sleep(ms: number) {
@@ -218,17 +355,64 @@ async function main() {
   const runInput = loginRunInput(options.blogHost);
   await provisionCredentials(options.context, credentials);
   credentials.accountId = "";
-  console.log("The Kakao account hint was stored as an App-scoped Secret Variable.");
+  credentials.password = "";
+  console.log("Kakao credentials were stored as App-scoped Secret Variables.");
   console.log("The InputConfig contains only $var references; Run input contains only blogHost.");
   if (options.configureOnly) return;
 
-  const run = await createLoginRun(options.context, runInput.blogHost);
+  const markdown = await readFile(options.markdownPath, "utf8");
+  const draft = createExampleDraft(markdown);
+
   console.log(
-    `Run ${run.run_id} created. Approve Kakao verification when requested; completion is polled automatically.`,
+    "Starting connection.login. Approve the Kakao notification on the registered device.",
   );
-  const terminalRun = await waitForTerminalRun(options.context, run.run_id);
-  console.log(JSON.stringify(terminalRun, null, 2));
-  if (terminalRun.state !== "succeeded" && terminalRun.state !== "success") process.exitCode = 1;
+  const login = await runAction<ConnectionResult>(
+    options.context,
+    LOGIN_ACTION,
+    runInput,
+    11 * 60 * 1000,
+  );
+  const status = await runAction<ConnectionResult>(
+    options.context,
+    STATUS_ACTION,
+    { provider: "tistory", connectionId: "default" },
+    2 * 60 * 1000,
+  );
+  if (!status.result.authenticated) throw new Error("stored Tistory session is not authenticated");
+
+  const prepared = await runAction<PrepareResult>(
+    options.context,
+    PREPARE_ACTION,
+    draft,
+    2 * 60 * 1000,
+  );
+  console.log(`Prepared private example post: ${draft.title}`);
+  const published = await runAction<PostResult>(
+    options.context,
+    PUBLISH_ACTION,
+    privatePublishInput(draft, prepared.result.draftHash),
+    6 * 60 * 1000,
+    true,
+  );
+
+  console.log(
+    JSON.stringify(
+      {
+        loginRunId: login.run.run_id,
+        statusRunId: status.run.run_id,
+        prepareRunId: prepared.run.run_id,
+        publishRunId: published.run.run_id,
+        blogHost: status.result.blogHost,
+        title: draft.title,
+        postId: published.result.postId,
+        entryUrl: published.result.entryUrl,
+        visibility: published.result.visibility,
+        representativeImageApplied: published.result.representativeImageApplied,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";

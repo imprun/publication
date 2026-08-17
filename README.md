@@ -8,11 +8,11 @@ the backend contract is complete.
 
 1. `connection.login` connects Puppeteer to the Job-scoped `edge-cdp` capability
    and creates an isolated BrowserContext. Browser Edge is used only as an
-   origin-aware HTTP runtime and cookie/storage jar: the action uses `fetch` for
-   the HAR-backed Tistory/Kakao state machine and never queries, fills, or clicks
-   page elements. If Kakao requires phone approval, the App checks its status
-   every second and continues automatically. The persisted Run input contains
-   only the public Tistory blog host.
+   origin-aware JavaScript runtime and cookie/storage jar. It starts the Tistory
+   OAuth transaction with `Kakao.Auth.authorize()`, then calls the Kakao Account
+   page's loaded client for `authenticate` and one-second phone-approval polling.
+   It never queries, fills, or clicks page elements. The persisted Run input
+   contains only the public Tistory blog host.
 2. The action writes the Chrome session to the App-owned Secret Variable
    `connections/tistory/default/session`.
 3. It writes safe connection metadata to the App-owned Resource
@@ -66,17 +66,19 @@ npm run build
 
 ## Tistory login E2E CLI
 
-The CLI provisions the Kakao account hint as an encrypted App-scoped Secret
-Variable, binds it to `connection.login` through an InputConfig, creates the Run,
-and checks the Run every second until it finishes. The local JSON file is never
-used as the Run input and must not be committed.
+The CLI provisions Kakao credentials as encrypted App-scoped Secret Variables,
+binds them to `connection.login` through an InputConfig, waits for phone approval,
+verifies the stored session, prepares `examples/tistory-e2e.md`, waits for the
+publish HumanTask, and reports the resulting private post ID and URL. The local
+credential file is never used as Run input and must not be committed.
 
 Create a local file outside the repository, or under the ignored `.secrets/`
 directory:
 
 ```json
 {
-  "accountId": "your-kakao-account"
+  "accountId": "your-kakao-account",
+  "password": "your-kakao-password"
 }
 ```
 
@@ -90,17 +92,17 @@ The existing ignored `.env` format is also supported:
 
 ```text
 KAKAO_LOGINID=your-kakao-account
+KAKAO_LOGINPWD=your-kakao-password
 npm run e2e:tistory-login -- --context junsik-cloud --blog-host pak2251.tistory.com --env .env
 ```
 
-Publication loads Tistory's Kakao JavaScript SDK and calls
-`Kakao.Auth.authorize()` directly with the account identifier as `loginHint`.
-It does not inspect login fields, click login controls, or receive a Kakao
-password. If Kakao sends a phone approval request, approve it on the registered
-device; no separate CLI confirmation is required. Use `--configure-only` to
-provision or rotate the Secret Variable without starting a Run. Remove the
-plaintext account-hint file after provisioning or keep it in an external secret
-manager; Publication never deletes user files.
+If Kakao sends a phone approval request, approve it on the registered device; the
+action checks the page-owned verification state every second. After login, the
+CLI creates a private post approval task in Imprun Cloud and waits for the user to
+approve it. Use `--markdown <path>` to replace the example Markdown, or
+`--configure-only` to rotate the Secret Variables without starting a Run. Remove
+the plaintext credential file after provisioning or keep it in an external
+secret manager; Publication never deletes user files.
 
-No live Tistory mutation is part of the automated test suite. A release smoke
-test must use a private post first and must be explicitly approved.
+No live Tistory mutation is part of the automated unit test suite. The E2E CLI
+uses a private post and cannot publish until its HumanTask is explicitly approved.

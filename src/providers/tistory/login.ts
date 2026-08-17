@@ -27,6 +27,9 @@ const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 const KAKAO_SDK_READY_TIMEOUT_MS = 10_000;
+const KAKAO_ACCOUNT_JAVASCRIPT_READY_TIMEOUT_MS = 20_000;
+const KAKAO_LOGIN_STATE_KEY = "publication.tistory.kakao-login";
+const KAKAO_ROOT_MODULE_KEY = "publication.tistory.kakao-root-module";
 const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
@@ -36,8 +39,9 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
   const host = normalizeTistoryHost(input.blogHost);
   const origin = tistoryOrigin(host);
   const accountId = input.accountId?.trim();
-  if (!accountId) {
-    throw new Error("Tistory login requires an accountId input");
+  const password = input.password;
+  if (!accountId || !password) {
+    throw new Error("Tistory login requires accountId and password inputs");
   }
   if (!ctx.capabilities?.has("edge-cdp/v1")) {
     throw new Error("Tistory login requires an assigned edge-cdp BrowserSession");
@@ -62,7 +66,14 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
       BROWSER_PAGE_CREATION_TIMEOUT_MS,
       "Tistory isolated browser page creation timed out",
     );
-    result = await performLogin({ ...input, accountId }, ctx, host, origin, isolatedContext, page);
+    result = await performLogin(
+      { ...input, accountId, password },
+      ctx,
+      host,
+      origin,
+      isolatedContext,
+      page,
+    );
   } catch (error) {
     actionError = error;
   }
@@ -98,7 +109,7 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
 }
 
 async function performLogin(
-  input: ConnectionLoginInput & { accountId: string },
+  input: ConnectionLoginInput & { accountId: string; password: string },
   ctx: WindforceContext,
   host: string,
   origin: string,
@@ -106,7 +117,9 @@ async function performLogin(
   page: Page,
 ): Promise<TistoryLoginResult> {
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+  await installKakaoAccountRuntimeProbe(page);
   await startKakaoAuthorization(page, `${origin}/manage/newpost`, input.accountId);
+  await authenticateKakaoAccountWithPageJavaScript(page, input.accountId, input.password, deadline);
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();
@@ -234,6 +247,257 @@ async function startKakaoAuthorization(
     )
     .catch(() => false);
   if (!invoked) throw new Error("Tistory Kakao SDK authorization failed");
+}
+
+async function installKakaoAccountRuntimeProbe(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument((rootModuleKey) => {
+    const queue: unknown[] = [];
+    const inspectChunk = (item: unknown) => {
+      if (!Array.isArray(item)) return;
+      const factories = item[1];
+      if (!factories || typeof factories !== "object") return;
+      for (const [moduleId, factory] of Object.entries(factories)) {
+        const source = String(factory);
+        if (
+          source.includes("useStore must be used within StoreProvider") &&
+          source.includes("parseParams")
+        ) {
+          Reflect.set(window, Symbol.for(rootModuleKey), Number(moduleId));
+          return;
+        }
+      }
+    };
+    let currentPush = (...items: unknown[]) => {
+      for (const item of items) inspectChunk(item);
+      return Array.prototype.push.apply(queue, items);
+    };
+    Object.defineProperty(queue, "push", {
+      configurable: true,
+      get() {
+        return currentPush;
+      },
+      set(push: unknown) {
+        if (typeof push === "function") {
+          const delegate = (...items: unknown[]) => Reflect.apply(push, queue, items) as number;
+          currentPush = (...items: unknown[]) => {
+            for (const item of items) inspectChunk(item);
+            return delegate(...items);
+          };
+        }
+      },
+    });
+    Reflect.set(window, "webpackChunk_N_E", queue);
+  }, KAKAO_ROOT_MODULE_KEY);
+}
+
+type KakaoAuthenticationState =
+  | "runtime-unavailable"
+  | "two-step-pending"
+  | "navigating"
+  | "rejected";
+
+async function authenticateKakaoAccountWithPageJavaScript(
+  page: Page,
+  accountId: string,
+  password: string,
+  deadline: number,
+): Promise<void> {
+  const runtimeDeadline = Math.min(
+    deadline,
+    Date.now() + KAKAO_ACCOUNT_JAVASCRIPT_READY_TIMEOUT_MS,
+  );
+  let state: KakaoAuthenticationState = "runtime-unavailable";
+  while (Date.now() < runtimeDeadline && state === "runtime-unavailable") {
+    state = await callKakaoAuthenticate(page, accountId, password);
+    if (state === "runtime-unavailable") {
+      await sleep(Math.min(250, Math.max(1, runtimeDeadline - Date.now())));
+    }
+  }
+  if (state === "runtime-unavailable") {
+    throw new Error("Kakao account JavaScript client did not become ready");
+  }
+  if (state === "rejected") {
+    throw new Error("Kakao account authentication did not enter a supported approval state");
+  }
+  if (state === "navigating") return;
+
+  while (Date.now() < deadline) {
+    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+    const currentURL = parsePageURL(page.url());
+    if (currentURL && currentURL.hostname !== "accounts.kakao.com") return;
+    const pollingState = await pollKakaoTwoStepVerification(page);
+    if (pollingState === "navigating") return;
+    if (pollingState === "rejected") {
+      const updatedURL = parsePageURL(page.url());
+      if (updatedURL && updatedURL.hostname !== "accounts.kakao.com") return;
+      throw new Error("Kakao two-step verification could not continue");
+    }
+  }
+  throw new Error("Kakao two-step verification was not approved before the login deadline");
+}
+
+async function callKakaoAuthenticate(
+  page: Page,
+  accountId: string,
+  password: string,
+): Promise<KakaoAuthenticationState> {
+  return page
+    .evaluate(
+      async ({ accountId, password, rootModuleKey, stateKey }) => {
+        type KakaoClient = {
+          call(action: string, input: Record<string, unknown>): Promise<unknown>;
+        };
+        type KakaoRootStore = {
+          client?: KakaoClient;
+          context?: Record<string, unknown>;
+          localeStore?: { locale?: string };
+          params?: Record<string, unknown>;
+        };
+        type WebpackRequire = {
+          (moduleId: number): Record<string, unknown>;
+          m?: Record<string, unknown>;
+        };
+
+        const queue = Reflect.get(window, "webpackChunk_N_E");
+        if (!Array.isArray(queue)) return "runtime-unavailable";
+        let webpackRequire: WebpackRequire | undefined;
+        queue.push([
+          [`publication-${Date.now()}-${Math.random()}`],
+          {},
+          (runtime: unknown) => {
+            webpackRequire = runtime as WebpackRequire;
+          },
+        ]);
+        if (!webpackRequire?.m) return "runtime-unavailable";
+
+        const rootModuleId = Reflect.get(window, Symbol.for(rootModuleKey));
+        if (typeof rootModuleId !== "number") return "runtime-unavailable";
+
+        let rootStore: KakaoRootStore;
+        try {
+          const moduleExports = webpackRequire(rootModuleId);
+          const getRootStore = Reflect.get(moduleExports, "MO");
+          if (typeof getRootStore !== "function") return "runtime-unavailable";
+          rootStore = getRootStore(() => {
+            throw new Error("Kakao root store is not initialized");
+          }) as KakaoRootStore;
+        } catch {
+          return "runtime-unavailable";
+        }
+
+        const client = rootStore.client;
+        if (!client || typeof client.call !== "function") return "runtime-unavailable";
+        const params = rootStore.params ?? {};
+        const context = rootStore.context ?? {};
+        const loginUrl =
+          typeof params.loginUrl === "string"
+            ? params.loginUrl
+            : typeof context.loginUrl === "string"
+              ? context.loginUrl
+              : window.location.href;
+        const lang =
+          typeof rootStore.localeStore?.locale === "string"
+            ? rootStore.localeStore.locale
+            : typeof context.locale === "string"
+              ? context.locale
+              : "ko";
+
+        const userAgentData = Reflect.get(navigator, "userAgentData") as
+          | {
+              mobile?: boolean;
+              platform?: string;
+              getHighEntropyValues?: (keys: string[]) => Promise<Record<string, unknown>>;
+            }
+          | undefined;
+        const highEntropy: Record<string, unknown> = userAgentData?.getHighEntropyValues
+          ? await userAgentData
+              .getHighEntropyValues([
+                "architecture",
+                "bitness",
+                "fullVersionList",
+                "model",
+                "platformVersion",
+              ])
+              .catch(() => ({}))
+          : {};
+        const browserHints = {
+          a: highEntropy.architecture,
+          b: highEntropy.bitness,
+          m: userAgentData?.mobile ?? false,
+          pv: highEntropy.platformVersion,
+          fvl: highEntropy.fullVersionList,
+          mo: highEntropy.model,
+          p: userAgentData?.platform,
+        };
+
+        let response: unknown;
+        try {
+          response = await client.call("authenticate", {
+            loginId: accountId,
+            loginKey: accountId,
+            password,
+            staySignedIn: false,
+            saveSignedIn: false,
+            loginUrl,
+            lang,
+            security_context: { a: [], b: browserHints, c: false, d: [] },
+          });
+        } catch {
+          return "rejected";
+        }
+        if (!response || typeof response !== "object") return "rejected";
+        const continueUrl = Reflect.get(response, "continueUrl");
+        if (typeof continueUrl === "string" && continueUrl.length > 0) {
+          setTimeout(() => window.location.assign(continueUrl), 0);
+          return "navigating";
+        }
+        const token = Reflect.get(response, "token");
+        if (typeof token !== "string" || token.length === 0) return "rejected";
+        Reflect.set(window, Symbol.for(stateKey), { client, token });
+        return "two-step-pending";
+      },
+      {
+        accountId,
+        password,
+        rootModuleKey: KAKAO_ROOT_MODULE_KEY,
+        stateKey: KAKAO_LOGIN_STATE_KEY,
+      },
+    )
+    .catch(() => "runtime-unavailable" as const);
+}
+
+async function pollKakaoTwoStepVerification(page: Page): Promise<KakaoAuthenticationState> {
+  return page
+    .evaluate(async (stateKey) => {
+      type KakaoClient = {
+        call(action: string, input: Record<string, unknown>): Promise<unknown>;
+      };
+      type LoginState = { client?: KakaoClient; token?: string };
+      const symbol = Symbol.for(stateKey);
+      const loginState = Reflect.get(window, symbol) as LoginState | undefined;
+      if (!loginState?.client || !loginState.token) return "rejected";
+
+      let response: unknown;
+      try {
+        response = await loginState.client.call("check_tms_for_two_step_verification", {
+          token: loginState.token,
+          isRememberBrowser: false,
+        });
+      } catch {
+        return "two-step-pending";
+      }
+      if (!response || typeof response !== "object") return "two-step-pending";
+      const continueUrl = Reflect.get(response, "continueUrl");
+      if (typeof continueUrl === "string" && continueUrl.length > 0) {
+        Reflect.deleteProperty(window, symbol);
+        setTimeout(() => window.location.assign(continueUrl), 0);
+        return "navigating";
+      }
+      const nextToken = Reflect.get(response, "token");
+      if (typeof nextToken === "string" && nextToken.length > 0) loginState.token = nextToken;
+      return "two-step-pending";
+    }, KAKAO_LOGIN_STATE_KEY)
+    .catch(() => "two-step-pending" as const);
 }
 
 function isPostAuthenticationTistoryURL(url: URL, host: string): boolean {
