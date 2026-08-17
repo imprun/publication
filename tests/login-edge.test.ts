@@ -19,16 +19,13 @@ const input = {
   password: "fixture-only",
 };
 
-type HumanOutcome =
-  | "automatic-success"
-  | "success"
-  | "cancel"
-  | "expired"
-  | "authentication-failure";
+type LoginOutcome = "automatic-success" | "delayed-success" | "authentication-failure";
 
-function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = false) {
+function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = false) {
   let currentURL = "about:blank";
   let authenticated = false;
+  let submitted = false;
+  let authenticationPolls = 0;
   let atKakaoLogin = !startsAtTistoryLogin;
   let rootClosed = false;
   let popupClosed = false;
@@ -80,6 +77,7 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     isVisible: vi.fn(async () => true),
     click: vi.fn(async () => {
       targets.push(popupTarget);
+      submitted = true;
       if (outcome === "automatic-success") {
         authenticated = true;
         currentURL = "https://example.tistory.com/manage/newpost";
@@ -98,7 +96,16 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
           : "https://accounts.kakao.com/login"
         : "https://accounts.kakao.com/login";
     }),
-    url: vi.fn(() => currentURL),
+    url: vi.fn(() => {
+      if (outcome === "delayed-success" && submitted && !authenticated) {
+        authenticationPolls += 1;
+        if (authenticationPolls >= 3) {
+          authenticated = true;
+          currentURL = "https://example.tistory.com/manage/newpost";
+        }
+      }
+      return currentURL;
+    }),
     $: vi.fn(async (selector: string) => {
       if (selector.includes("loginId") || selector.includes("loginKey")) return loginID;
       if (selector.includes("password")) return password;
@@ -185,16 +192,8 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     endpoint: () => "http://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
     webSocketEndpoint: () => "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
   };
-  const humanWait = vi.fn(async <T>() => {
-    if (outcome === "expired") throw new Error("HumanTask is expired");
-    if (outcome === "cancel") return { taskId: "task-test", outcome: "cancel" as const };
-    authenticated = outcome === "success";
-    currentURL = "https://www.tistory.com/";
-    return {
-      taskId: "task-test",
-      outcome: "submit" as const,
-      value: { completed: true } as T,
-    };
+  const humanWait = vi.fn(async () => {
+    throw new Error("HumanTask must not be used for observable browser authentication");
   });
   ctx.human.wait = humanWait as typeof ctx.human.wait;
 
@@ -287,37 +286,18 @@ describe("Tistory Browser Edge login", () => {
     expect(browserMocks.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("closes only the created target tree when the HumanTask is canceled", async () => {
-    const harness = createBrowserHarness("cancel");
-
-    await expect(loginToTistory(input, harness.ctx)).rejects.toThrow("Tistory login was canceled");
-
-    expect(harness.loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
-    expect(harness.passwordLocator.fill).toHaveBeenCalledWith("fixture-only");
-    expect(harness.submit.click).toHaveBeenCalledOnce();
-    expect(harness.setVariable).not.toHaveBeenCalled();
-    expect(harness.setResource).not.toHaveBeenCalled();
-    expectOwnedTargetsCleaned(harness);
-  });
-
-  it("restores the target baseline when the HumanTask expires", async () => {
-    const harness = createBrowserHarness("expired");
-
-    await expect(loginToTistory(input, harness.ctx)).rejects.toThrow("HumanTask is expired");
-
-    expect(harness.setVariable).not.toHaveBeenCalled();
-    expect(harness.setResource).not.toHaveBeenCalled();
-    expectOwnedTargetsCleaned(harness);
-  });
-
-  it("waits for the management API and stores only an authenticated session", async () => {
-    const harness = createBrowserHarness("success");
-
-    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+  it("polls until delayed browser authentication reaches the management API", async () => {
+    vi.useFakeTimers();
+    const harness = createBrowserHarness("delayed-success");
+    const login = loginToTistory(input, harness.ctx);
+    const assertion = expect(login).resolves.toMatchObject({
       provider: "tistory",
       connectionId: "default",
       authenticated: true,
     });
+    await vi.waitFor(() => expect(harness.submit.click).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(2_000);
+    await assertion;
 
     expect(harness.page.cookies).toHaveBeenCalledWith(
       "https://example.tistory.com/",
@@ -326,6 +306,7 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.originalPage.evaluate).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
+    expect(harness.humanWait).not.toHaveBeenCalled();
     expectOwnedTargetsCleaned(harness);
   });
 
@@ -346,7 +327,7 @@ describe("Tistory Browser Edge login", () => {
   });
 
   it("uses the Tistory DOM login handler without Puppeteer's element click", async () => {
-    const harness = createBrowserHarness("success", true);
+    const harness = createBrowserHarness("automatic-success", true);
 
     await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
       authenticated: true,
@@ -369,9 +350,11 @@ describe("Tistory Browser Edge login", () => {
       "Tistory management session was not established before the login deadline",
     );
 
-    await vi.advanceTimersByTimeAsync(100_000);
+    await vi.waitFor(() => expect(harness.submit.click).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(610_000);
     await assertion;
 
+    expect(harness.humanWait).not.toHaveBeenCalled();
     expect(harness.setVariable).not.toHaveBeenCalled();
     expect(harness.setResource).not.toHaveBeenCalled();
     expectOwnedTargetsCleaned(harness);
