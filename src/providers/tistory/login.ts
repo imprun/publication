@@ -316,12 +316,10 @@ async function submitKakaoLoginWithPageJavaScript(
           document.querySelector<HTMLButtonElement | HTMLInputElement>(
             'button[type="submit"], input[type="submit"]',
           );
-        if (form && typeof form.requestSubmit === "function") {
-          form.requestSubmit(submitter ?? undefined);
-        } else if (submitter) {
-          submitter.click();
-        } else if (form) {
-          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        if (submitter) {
+          setTimeout(() => submitter.click(), 0);
+        } else if (form && typeof form.requestSubmit === "function") {
+          setTimeout(() => form.requestSubmit(), 0);
         } else {
           return false;
         }
