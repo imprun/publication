@@ -20,6 +20,7 @@ const loginAccess = {
   variables: [
     ...connectionAccess.variables,
     { scope: "app", path: "connections/tistory/default/account-id" },
+    { scope: "app", path: "connections/tistory/default/password" },
   ],
   writeVariables: [
     {
