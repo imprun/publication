@@ -19,7 +19,12 @@ const input = {
   password: "fixture-only",
 };
 
-type HumanOutcome = "success" | "cancel" | "expired" | "authentication-failure";
+type HumanOutcome =
+  | "automatic-success"
+  | "success"
+  | "cancel"
+  | "expired"
+  | "authentication-failure";
 
 function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = false) {
   let currentURL = "about:blank";
@@ -69,6 +74,10 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     isVisible: vi.fn(async () => true),
     click: vi.fn(async () => {
       targets.push(popupTarget);
+      if (outcome === "automatic-success") {
+        authenticated = true;
+        currentURL = "https://example.tistory.com/manage/newpost";
+      }
     }),
   };
   const page = {
@@ -102,7 +111,7 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
       return passwordLocator;
     }),
     evaluate: vi.fn(async (pageFunction: unknown, argument?: string) => {
-      if (argument?.includes("/manage/posts.json")) return outcome === "success";
+      if (argument?.includes("/manage/posts.json")) return authenticated;
       const source = String(pageFunction);
       if (source.includes("navigator.userAgent")) return "fixture-user-agent";
       if (source.includes("window.localStorage")) return [{ name: "fixture", value: "local" }];
@@ -168,13 +177,18 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     endpoint: () => "http://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
     webSocketEndpoint: () => "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
   };
-  ctx.human.wait = async <T>() => {
+  const humanWait = vi.fn(async <T>() => {
     if (outcome === "expired") throw new Error("HumanTask is expired");
-    if (outcome === "cancel") return { taskId: "task-test", outcome: "cancel" };
-    authenticated = true;
+    if (outcome === "cancel") return { taskId: "task-test", outcome: "cancel" as const };
+    authenticated = outcome === "success";
     currentURL = "https://www.tistory.com/";
-    return { taskId: "task-test", outcome: "submit", value: { completed: true } as T };
-  };
+    return {
+      taskId: "task-test",
+      outcome: "submit" as const,
+      value: { completed: true } as T,
+    };
+  });
+  ctx.human.wait = humanWait as typeof ctx.human.wait;
 
   return {
     ctx,
@@ -186,6 +200,7 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
     passwordLocator,
     kakaoButton,
     submit,
+    humanWait,
     setVariable,
     setResource,
     targets,
@@ -217,6 +232,16 @@ describe("Tistory Browser Edge login", () => {
     await expect(loginToTistory(input, ctx)).rejects.toThrow(
       "requires an assigned edge-cdp BrowserSession",
     );
+    expect(browserMocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a login without account inputs instead of falling back to manual browser login", async () => {
+    const ctx = mockContext(fetch);
+
+    await expect(
+      loginToTistory({ ...input, accountId: undefined, password: undefined }, ctx),
+    ).rejects.toThrow("requires accountId and password inputs");
+
     expect(browserMocks.connect).not.toHaveBeenCalled();
   });
 
@@ -291,6 +316,22 @@ describe("Tistory Browser Edge login", () => {
       "https://www.tistory.com/",
     );
     expect(harness.originalPage.evaluate).not.toHaveBeenCalled();
+    expect(harness.setVariable).toHaveBeenCalledOnce();
+    expect(harness.setResource).toHaveBeenCalledOnce();
+    expectOwnedTargetsCleaned(harness);
+  });
+
+  it("stores an automatically authenticated account without creating a HumanTask", async () => {
+    const harness = createBrowserHarness("automatic-success");
+
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(harness.loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
+    expect(harness.passwordLocator.fill).toHaveBeenCalledWith("fixture-only");
+    expect(harness.submit.click).toHaveBeenCalledOnce();
+    expect(harness.humanWait).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
     expectOwnedTargetsCleaned(harness);

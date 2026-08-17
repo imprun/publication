@@ -37,6 +37,11 @@ const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
   const host = normalizeTistoryHost(input.blogHost);
   const origin = tistoryOrigin(host);
+  const accountId = input.accountId?.trim();
+  const password = input.password;
+  if (!accountId || !password) {
+    throw new Error("Tistory login requires accountId and password inputs");
+  }
   if (!ctx.capabilities?.has("edge-cdp/v1")) {
     throw new Error("Tistory login requires an assigned edge-cdp BrowserSession");
   }
@@ -62,7 +67,7 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
       "Tistory isolated browser page creation timed out",
     );
     rootTarget = page.target();
-    result = await performLogin(input, ctx, host, origin, page);
+    result = await performLogin({ ...input, accountId, password }, ctx, host, origin, page);
   } catch (error) {
     actionError = error;
   }
@@ -98,7 +103,7 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
 }
 
 async function performLogin(
-  input: ConnectionLoginInput,
+  input: ConnectionLoginInput & { accountId: string; password: string },
   ctx: WindforceContext,
   host: string,
   origin: string,
@@ -109,35 +114,37 @@ async function performLogin(
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
   await openKakaoLoginIfNeeded(page);
-  await fillCredentialsIfPresent(page, input.accountId, input.password);
-  await submitCredentialsIfPresent(page, input.accountId, input.password);
+  await fillCredentials(page, input.accountId, input.password);
+  await submitCredentials(page);
 
-  const decision = await waitForHumanDecision<LoginApproval>(ctx, {
-    key: "tistory-kakao-login",
-    kind: "form",
-    title: "카카오 로그인을 완료해 주세요",
-    description:
-      "계정 입력과 로그인을 자동 제출했습니다. 열린 브라우저에서 CAPTCHA 또는 2단계 인증을 끝낸 뒤 승인해 주세요.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["completed"],
-      properties: {
-        completed: {
-          type: "boolean",
-          const: true,
-          title: "로그인을 완료했습니다",
+  if (!(await isAuthenticatedManagementSession(page, origin, host))) {
+    const decision = await waitForHumanDecision<LoginApproval>(ctx, {
+      key: "tistory-kakao-additional-verification",
+      kind: "form",
+      title: "카카오 추가 인증을 확인해 주세요",
+      description:
+        "계정 입력과 로그인 제출은 자동으로 완료했습니다. 카카오톡 또는 휴대전화에 표시된 추가 인증만 완료한 뒤 승인해 주세요. 아이디와 비밀번호를 다시 입력할 필요는 없습니다.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["completed"],
+        properties: {
+          completed: {
+            type: "boolean",
+            const: true,
+            title: "추가 인증을 완료했습니다",
+          },
         },
       },
-    },
-    privateContext: { provider: "tistory", connectionId: "default", blogHost: host },
-    timeoutMs: 10 * 60 * 1000,
-  });
-  if (decision.outcome === "cancel" || decision.value?.completed !== true) {
-    throw new Error("Tistory login was canceled");
-  }
+      privateContext: { provider: "tistory", connectionId: "default", blogHost: host },
+      timeoutMs: 10 * 60 * 1000,
+    });
+    if (decision.outcome === "cancel" || decision.value?.completed !== true) {
+      throw new Error("Tistory login was canceled");
+    }
 
-  await waitForAuthenticatedSession(page, origin, host);
+    await waitForAuthenticatedSession(page, origin, host);
+  }
   const capturedAt = new Date().toISOString();
   const storageState = await captureStorageState(page, origin);
   if (
@@ -218,13 +225,15 @@ function parseKakaoLoginDestination(href: string, baseURL: string): URL {
   return destination;
 }
 
-async function fillCredentialsIfPresent(page: Page, accountId?: string, password?: string) {
-  if (accountId && (await isVisible(page, 'input[name="loginId"]'))) {
-    await page.locator('input[name="loginId"]').fill(accountId);
+async function fillCredentials(page: Page, accountId: string, password: string) {
+  if (!(await isVisible(page, 'input[name="loginId"]'))) {
+    throw new Error("Kakao account input was not available for automatic login");
   }
-  if (password && (await isVisible(page, 'input[name="password"]'))) {
-    await page.locator('input[name="password"]').fill(password);
+  if (!(await isVisible(page, 'input[name="password"]'))) {
+    throw new Error("Kakao password input was not available for automatic login");
   }
+  await page.locator('input[name="loginId"]').fill(accountId);
+  await page.locator('input[name="password"]').fill(password);
   const saveSignedIn = await page.$('input[name="saveSignedIn"]');
   if (
     saveSignedIn &&
@@ -235,10 +244,11 @@ async function fillCredentialsIfPresent(page: Page, accountId?: string, password
   }
 }
 
-async function submitCredentialsIfPresent(page: Page, accountId?: string, password?: string) {
-  if (!accountId || !password) return;
+async function submitCredentials(page: Page) {
   const submit = await page.$('button[type="submit"]');
-  if (!submit || !(await submit.isVisible().catch(() => false))) return;
+  if (!submit || !(await submit.isVisible().catch(() => false))) {
+    throw new Error("Kakao login submit control was not available for automatic login");
+  }
   const navigation = page
     .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
     .catch(() => null);
@@ -267,22 +277,30 @@ async function waitForAuthenticatedSession(
         .catch(() => null);
       currentURL = parsePageURL(page.url());
     }
-    if (currentURL && isAuthenticatedManagementURL(currentURL, host)) {
-      const apiAuthenticated = await page
-        .evaluate(async (endpoint) => {
-          const response = await fetch(endpoint, {
-            credentials: "include",
-            redirect: "manual",
-          });
-          const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-          return response.status >= 200 && response.status < 300 && contentType.includes("json");
-        }, apiURL)
-        .catch(() => false);
-      if (apiAuthenticated) return;
-    }
+    if (currentURL && (await isAuthenticatedManagementSession(page, origin, host, apiURL))) return;
     await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
   }
   throw new Error("Tistory management session was not established before the login deadline");
+}
+
+async function isAuthenticatedManagementSession(
+  page: Page,
+  origin: string,
+  host: string,
+  apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`,
+): Promise<boolean> {
+  const currentURL = parsePageURL(page.url());
+  if (!currentURL || !isAuthenticatedManagementURL(currentURL, host)) return false;
+  return page
+    .evaluate(async (endpoint) => {
+      const response = await fetch(endpoint, {
+        credentials: "include",
+        redirect: "manual",
+      });
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      return response.status >= 200 && response.status < 300 && contentType.includes("json");
+    }, apiURL)
+    .catch(() => false);
 }
 
 function parsePageURL(value: string): URL | undefined {
