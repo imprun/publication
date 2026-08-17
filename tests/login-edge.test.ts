@@ -22,6 +22,7 @@ const input = {
 type LoginOutcome =
   | "automatic-success"
   | "delayed-success"
+  | "oauth-approval"
   | "authentication-failure"
   | "credential-failure"
   | "untrusted-continuation";
@@ -37,6 +38,7 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
   let securityContextMatches = false;
   const kakaoAuthenticate = vi.fn();
   const kakaoTMSPoll = vi.fn();
+  const kakaoOAuthApproval = vi.fn();
   const loginID = {
     isVisible: vi.fn(async () => atKakaoLogin),
     evaluate: vi.fn(async () => "loginKey"),
@@ -96,6 +98,10 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
       if (url.includes("/auth/kakao/redirect")) {
         authenticated = true;
         currentURL = "https://example.tistory.com/manage/newpost";
+        return;
+      }
+      if (url.includes("kauth.kakao.com/oauth/authorize")) {
+        currentURL = url;
         return;
       }
       currentURL = url.includes("/manage/posts/")
@@ -175,6 +181,13 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
               continueUrl: "https://www.tistory.com/auth/kakao/redirect",
             };
           }
+          if (outcome === "oauth-approval") {
+            return {
+              httpStatus: 200,
+              status: 0,
+              continueUrl: "https://kauth.kakao.com/oauth/authorize?client_id=fixture",
+            };
+          }
           if (outcome === "credential-failure") {
             return { httpStatus: 200, status: -450 };
           }
@@ -202,6 +215,16 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
       }
       if (typeof argument === "string" && argument.includes("/manage/posts.json")) {
         return authenticated;
+      }
+      if (source.includes("document.forms") && source.includes("user_oauth_approval")) {
+        if (!currentURL.includes("kauth.kakao.com/oauth/authorize")) return false;
+        if (source.includes("HTMLFormElement.prototype.submit")) {
+          kakaoOAuthApproval();
+          authenticated = true;
+          currentURL = "https://www.tistory.com/";
+          return undefined;
+        }
+        return true;
       }
       if (source.includes("navigator.userAgent")) return "fixture-user-agent";
       if (source.includes("window.localStorage")) return [{ name: "fixture", value: "local" }];
@@ -284,6 +307,7 @@ function createBrowserHarness(outcome: LoginOutcome, startsAtTistoryLogin = fals
     submit,
     kakaoAuthenticate,
     kakaoTMSPoll,
+    kakaoOAuthApproval,
     rawPasswordSent: () => rawPasswordSent,
     securityContextMatches: () => securityContextMatches,
     humanWait,
@@ -403,6 +427,26 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.rawPasswordSent()).toBe(false);
     expect(harness.securityContextMatches()).toBe(true);
     expect(harness.humanWait).not.toHaveBeenCalled();
+    expect(harness.setVariable).toHaveBeenCalledOnce();
+    expect(harness.setResource).toHaveBeenCalledOnce();
+    expectOwnedTargetsCleaned(harness);
+  });
+
+  it("submits the Kakao OAuth approval form before verifying the Tistory session", async () => {
+    const harness = createBrowserHarness("oauth-approval");
+
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(harness.page.goto).toHaveBeenCalledWith(
+      expect.stringContaining("kauth.kakao.com/oauth/authorize"),
+      expect.anything(),
+    );
+    expect(harness.kakaoOAuthApproval).toHaveBeenCalledOnce();
+    expect(harness.loginLocator.fill).not.toHaveBeenCalled();
+    expect(harness.passwordLocator.fill).not.toHaveBeenCalled();
+    expect(harness.submit.click).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
     expectOwnedTargetsCleaned(harness);
