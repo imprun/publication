@@ -209,28 +209,12 @@ async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
   const kakaoButton = await page.$("a.btn_login.link_kakao_id");
   if (!kakaoButton || !(await kakaoButton.isVisible().catch(() => false))) return;
 
-  const href = await kakaoButton.evaluate((element) => (element as HTMLAnchorElement).href);
-  const destination = parseKakaoLoginDestination(href, page.url());
-  await page.goto(destination.href, {
+  const navigation = page.waitForNavigation({
     waitUntil: "domcontentloaded",
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
-}
-
-function parseKakaoLoginDestination(href: string, baseURL: string): URL {
-  let destination: URL;
-  try {
-    destination = new URL(href, baseURL);
-  } catch {
-    throw new Error("Tistory Kakao login link was invalid");
-  }
-  const allowed =
-    destination.protocol === "https:" &&
-    ((destination.hostname === "www.tistory.com" && destination.pathname.startsWith("/auth/")) ||
-      destination.hostname === "kauth.kakao.com" ||
-      destination.hostname === "accounts.kakao.com");
-  if (!allowed) throw new Error("Tistory Kakao login link left the allowed authentication hosts");
-  return destination;
+  await kakaoButton.evaluate((element) => (element as HTMLElement).click());
+  await navigation;
 }
 
 async function fillCredentials(page: Page, accountId: string, password: string) {
