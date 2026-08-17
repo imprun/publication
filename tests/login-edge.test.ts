@@ -106,7 +106,6 @@ function createBrowserHarness(outcome: LoginOutcome) {
           encryptionPassphrase: "fixture-passphrase",
           loginUrl: "fixture-login-url",
           locale: "ko",
-          botSignals: [44],
           userAgentHints: {
             a: "783836",
             b: "3634",
@@ -138,9 +137,9 @@ function createBrowserHarness(outcome: LoginOutcome) {
             securityContext.a.length === 0 &&
             typeof securityContext.b?.m === "string" &&
             typeof securityContext.b?.mo === "number" &&
-            securityContext.c === true &&
+            securityContext.c === false &&
             Array.isArray(securityContext.d) &&
-            securityContext.d.includes(44);
+            securityContext.d.length === 0;
           if (outcome === "automatic-success") {
             return {
               httpStatus: 200,
@@ -194,19 +193,6 @@ function createBrowserHarness(outcome: LoginOutcome) {
       if (source.includes("sessionStorage")) return { fixture: "session" };
       return undefined;
     }),
-    cookies: vi.fn(async () => [
-      {
-        name: "session",
-        value: "fixture-cookie",
-        domain: ".tistory.com",
-        path: "/",
-        expires: -1,
-        httpOnly: true,
-        secure: true,
-        sameSite: "Lax" as const,
-      },
-    ]),
-    target: () => rootTarget,
     isClosed: () => rootClosed,
     close: vi.fn(async () => {
       rootClosed = true;
@@ -219,6 +205,29 @@ function createBrowserHarness(outcome: LoginOutcome) {
     page: vi.fn(async () => page),
   };
   const browserContext = {
+    pages: vi.fn(async () => [page, popupPage].filter((ownedPage) => !ownedPage.isClosed())),
+    cookies: vi.fn(async () => [
+      {
+        name: "session",
+        value: "fixture-cookie",
+        domain: ".tistory.com",
+        path: "/",
+        expires: -1,
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax" as const,
+      },
+      {
+        name: "accounts-session",
+        value: "fixture-kakao-cookie",
+        domain: ".kakao.com",
+        path: "/",
+        expires: -1,
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax" as const,
+      },
+    ]),
     newPage: vi.fn(async () => {
       targets.push(rootTarget);
       return page;
@@ -363,10 +372,7 @@ describe("Tistory Browser Edge login", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await assertion;
 
-    expect(harness.page.cookies).toHaveBeenCalledWith(
-      "https://example.tistory.com/",
-      "https://www.tistory.com/",
-    );
+    expect(harness.browserContext.cookies).toHaveBeenCalledOnce();
     expect(harness.originalPage.evaluate).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
