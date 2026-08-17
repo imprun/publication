@@ -31,7 +31,6 @@ function createBrowserHarness(outcome: LoginOutcome) {
   let currentURL = "about:blank";
   let authenticated = false;
   let authenticationPolls = 0;
-  let authorizeNavigations = 0;
   let rootClosed = false;
   let popupClosed = false;
   let rawPasswordSent = false;
@@ -78,8 +77,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
         return;
       }
       if (url.includes("kauth.kakao.com/oauth/authorize")) {
-        authorizeNavigations += 1;
-        currentURL = authorizeNavigations === 1 ? "https://accounts.kakao.com/login/" : url;
+        currentURL = url;
         return;
       }
       currentURL = url.includes("/manage/posts/")
@@ -93,12 +91,16 @@ function createBrowserHarness(outcome: LoginOutcome) {
       const source = String(pageFunction);
       if (source.includes("stateEndpoint")) {
         tistoryAuthState();
-        kakaoAuthorize();
         return {
-          authorizeUrl: "https://kauth.kakao.com/oauth/authorize?client_id=fixture",
           httpStatus: 200,
-          started: true,
+          ready: true,
+          state: "fixture-state",
         };
+      }
+      if (source.includes('prompt: "select_account"') && typeof argument === "string") {
+        kakaoAuthorize();
+        currentURL = "https://accounts.kakao.com/login/";
+        return undefined;
       }
       if (source.includes("__NEXT_DATA__")) {
         return {
@@ -193,6 +195,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
       if (source.includes("sessionStorage")) return { fixture: "session" };
       return undefined;
     }),
+    waitForNavigation: vi.fn(async () => undefined),
     isClosed: () => rootClosed,
     close: vi.fn(async () => {
       rootClosed = true;

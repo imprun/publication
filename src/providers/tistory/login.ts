@@ -208,80 +208,52 @@ async function startKakaoAuthorization(
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
 
-  const started = await page
+  const authState = await page
     .evaluate(
       async ({ stateEndpoint, redirectUrl }) => {
-        const [stateResponse, loginResponse] = await Promise.all([
-          fetch(stateEndpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ redirectUrl, isPopup: false }),
-            credentials: "include",
-          }),
-          fetch(window.location.href, { credentials: "include", cache: "no-store" }),
-        ]);
+        const stateResponse = await fetch(stateEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ redirectUrl, isPopup: false }),
+          credentials: "include",
+        });
         const payload = await stateResponse.json().catch(() => null);
         const state =
           payload && typeof payload === "object" ? Reflect.get(payload, "data") : undefined;
-        const loginHtml = await loginResponse.text();
-        const clientId = /Kakao\.init\(\s*["']([^"']+)["']\s*\)/.exec(loginHtml)?.[1];
-        if (!stateResponse.ok || !loginResponse.ok || typeof state !== "string" || !clientId) {
-          return { httpStatus: stateResponse.status, started: false };
-        }
-
         const kakao = Reflect.get(window, "Kakao");
-        const sdkVersion =
-          kakao && typeof kakao === "object" && typeof Reflect.get(kakao, "VERSION") === "string"
-            ? (Reflect.get(kakao, "VERSION") as string)
-            : "1.44.0";
-        const language = navigator.language || "ko-KR";
-        const platform = navigator.platform.replace(/ /g, "_");
-        const ka = [
-          `sdk/${sdkVersion}`,
-          "os/javascript",
-          "sdk_type/javascript",
-          `lang/${language}`,
-          `device/${platform}`,
-          `origin/${encodeURIComponent(window.location.origin)}`,
-        ].join(" ");
-        const authTranId = (
-          Math.random().toString(36).slice(2) +
-          clientId +
-          Date.now().toString(36)
-        ).slice(0, 60);
-        const authorizeUrl = new URL("https://kauth.kakao.com/oauth/authorize");
-        authorizeUrl.searchParams.set("client_id", clientId);
-        authorizeUrl.searchParams.set("state", state);
-        authorizeUrl.searchParams.set("prompt", "select_account");
-        authorizeUrl.searchParams.set(
-          "redirect_uri",
-          `${window.location.origin}/auth/kakao/redirect`,
-        );
-        authorizeUrl.searchParams.set("response_type", "code");
-        authorizeUrl.searchParams.set("auth_tran_id", authTranId);
-        authorizeUrl.searchParams.set("ka", ka);
-        return { authorizeUrl: authorizeUrl.href, httpStatus: stateResponse.status, started: true };
+        const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
+        const authorize =
+          auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : undefined;
+        return {
+          httpStatus: stateResponse.status,
+          ready: stateResponse.ok && typeof state === "string" && typeof authorize === "function",
+          state: typeof state === "string" ? state : undefined,
+        };
       },
       { stateEndpoint: TISTORY_KAKAO_AUTH_STATE_ENDPOINT, redirectUrl },
     )
     .catch(() => null);
-  if (!started?.started || !started.authorizeUrl) {
+  if (!authState?.ready || !authState.state) {
     throw new Error(`Tistory Kakao authorization failed at ${safePageLocation(page.url())}`);
-  }
-  const authorizeUrl = new URL(started.authorizeUrl);
-  if (
-    authorizeUrl.protocol !== "https:" ||
-    authorizeUrl.hostname !== "kauth.kakao.com" ||
-    authorizeUrl.pathname !== "/oauth/authorize"
-  ) {
-    throw new Error("Tistory returned an untrusted Kakao authorization URL");
   }
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
-  await page.goto(authorizeUrl.href, {
+  const navigation = page.waitForNavigation({
     waitUntil: "domcontentloaded",
     timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
   });
+  await page.evaluate((state) => {
+    const kakao = Reflect.get(window, "Kakao");
+    const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
+    const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
+    if (typeof authorize !== "function") throw new Error("Kakao authorize API is unavailable");
+    authorize.call(auth, {
+      redirectUri: `${window.location.origin}/auth/kakao/redirect`,
+      state,
+      prompt: "select_account",
+    });
+  }, authState.state);
+  await navigation;
 }
 
 async function authenticateKakaoAccount(
