@@ -45,6 +45,10 @@ interface HumanTaskList {
   items: HumanTaskView[];
 }
 
+type LoginProgress =
+  | { kind: "human-task"; task: HumanTaskView }
+  | { kind: "terminal"; run: RunView };
+
 export function humanTaskDecisionRequest(
   taskId: string,
   answer: "approve" | "cancel",
@@ -243,7 +247,7 @@ async function createLoginRun(context: string, blogHost: string): Promise<RunVie
   );
 }
 
-async function waitForHumanTask(context: string, runId: string): Promise<HumanTaskView> {
+async function waitForLoginProgress(context: string, runId: string): Promise<LoginProgress> {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     const list = await imprunJson<HumanTaskList>(context, [
@@ -251,14 +255,14 @@ async function waitForHumanTask(context: string, runId: string): Promise<HumanTa
       "human-tasks?state=pending&limit=100",
     ]);
     const task = list.items.find((candidate) => candidate.run_id === runId);
-    if (task) return task;
+    if (task) return { kind: "human-task", task };
     const run = await imprunJson<RunView>(context, ["run", "show", runId]);
     if (run.state !== "queued" && run.state !== "running") {
-      throw new Error(`login Run became ${run.state} before creating a HumanTask`);
+      return { kind: "terminal", run };
     }
     await sleep(1_000);
   }
-  throw new Error("timed out waiting for the login HumanTask");
+  throw new Error("timed out waiting for automatic login or additional verification");
 }
 
 async function decideHumanTask(context: string, task: HumanTaskView): Promise<void> {
@@ -269,7 +273,7 @@ async function decideHumanTask(context: string, task: HumanTaskView): Promise<vo
     console.log(`expires at ${task.expires_at}`);
     const answer = (
       await terminal.question(
-        'Chrome에서 로그인과 2단계 인증을 마친 뒤 "approve"를 입력하세요. 취소하려면 "cancel": ',
+        '카카오톡 또는 휴대전화에서 추가 인증을 마친 뒤 "approve"를 입력하세요. 취소하려면 "cancel": ',
       )
     )
       .trim()
@@ -314,11 +318,16 @@ async function main() {
   if (options.configureOnly) return;
 
   const run = await createLoginRun(options.context, runInput.blogHost);
-  console.log(`Run ${run.run_id} created. Waiting for Browser Edge assignment and HumanTask.`);
-  const task = await waitForHumanTask(options.context, run.run_id);
-  console.log(`Job ${task.job_id} is waiting on the Browser Edge worker.`);
-  await decideHumanTask(options.context, task);
-  const terminalRun = await waitForTerminalRun(options.context, run.run_id);
+  console.log(`Run ${run.run_id} created. Waiting for automatic login or additional verification.`);
+  const progress = await waitForLoginProgress(options.context, run.run_id);
+  let terminalRun: RunView;
+  if (progress.kind === "human-task") {
+    console.log(`Job ${progress.task.job_id} requires additional Kakao verification.`);
+    await decideHumanTask(options.context, progress.task);
+    terminalRun = await waitForTerminalRun(options.context, run.run_id);
+  } else {
+    terminalRun = progress.run;
+  }
   console.log(JSON.stringify(terminalRun, null, 2));
   if (terminalRun.state !== "succeeded" && terminalRun.state !== "success") process.exitCode = 1;
 }
