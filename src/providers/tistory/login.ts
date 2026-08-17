@@ -117,6 +117,7 @@ async function performLogin(
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
   await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
   await submitKakaoLoginWithPageJavaScript(page, input.accountId, input.password);
+  await page.bringToFront();
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();

@@ -127,6 +127,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
       return undefined;
     }),
     waitForNavigation: vi.fn(async () => ({})),
+    bringToFront: vi.fn(async () => {}),
     isClosed: () => rootClosed,
     close: vi.fn(async () => {
       rootClosed = true;
@@ -288,6 +289,7 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.kakaoAuthorize).toHaveBeenCalledOnce();
     expect(harness.kakaoPageJavaScriptFill).toHaveBeenCalledOnce();
     expect(harness.kakaoPageJavaScriptSubmit).toHaveBeenCalledOnce();
+    expect(harness.page.bringToFront).toHaveBeenCalledOnce();
     expect(harness.humanWait).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
