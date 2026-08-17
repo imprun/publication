@@ -364,7 +364,7 @@ async function main() {
   const draft = createExampleDraft(markdown);
 
   console.log(
-    "Starting connection.login. Approve the Kakao notification on the registered device.",
+    "Starting connection.login. Complete Kakao CAPTCHA in Browser Edge if shown, then approve the device notification.",
   );
   const login = await runAction<ConnectionResult>(
     options.context,

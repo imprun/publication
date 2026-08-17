@@ -21,6 +21,7 @@ const input = {
 
 type LoginOutcome =
   | "automatic-success"
+  | "captcha-success"
   | "two-step-success"
   | "tistory-home"
   | "authentication-failure"
@@ -37,6 +38,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
   const tistoryAuthState = vi.fn();
   const kakaoAuthorize = vi.fn();
   const kakaoAuthenticate = vi.fn();
+  const kakaoCaptchaRender = vi.fn();
   const kakaoVerificationPoll = vi.fn();
   const managementNavigations: string[] = [];
 
@@ -74,11 +76,19 @@ function createBrowserHarness(outcome: LoginOutcome) {
         currentURL = "https://accounts.kakao.com/login/";
         return true;
       }
+      if (source.includes("loginState.loginInput") && source.includes("captchaToken")) {
+        return "two-step-pending";
+      }
+      if (source.includes("dkaptcha") && source.includes('document.createElement("main")')) {
+        kakaoCaptchaRender();
+        return true;
+      }
       if (source.includes('client.call("authenticate"')) {
         kakaoAuthenticate(argument);
         if (outcome === "runtime-unavailable") return "runtime-unavailable";
         if (outcome === "authentication-failure") return "two-step-pending";
         if (outcome === "two-step-success") return "two-step-pending";
+        if (outcome === "captcha-success") return "captcha-required";
         authenticated = true;
         currentURL =
           outcome === "tistory-home"
@@ -89,7 +99,10 @@ function createBrowserHarness(outcome: LoginOutcome) {
       if (source.includes("check_tms_for_two_step_verification")) {
         kakaoVerificationPoll();
         verificationPolls += 1;
-        if (outcome === "two-step-success" && verificationPolls >= 2) {
+        if (
+          (outcome === "two-step-success" && verificationPolls >= 2) ||
+          outcome === "captcha-success"
+        ) {
           authenticated = true;
           currentURL = "https://example.tistory.com/manage/newpost";
           return "navigating";
@@ -181,6 +194,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
     tistoryAuthState,
     kakaoAuthorize,
     kakaoAuthenticate,
+    kakaoCaptchaRender,
     kakaoVerificationPoll,
     humanWait,
     setVariable,
@@ -278,6 +292,20 @@ describe("Tistory Browser Edge login", () => {
 
     expect(harness.kakaoVerificationPoll).toHaveBeenCalledTimes(2);
     expect(harness.managementNavigations).toEqual([]);
+    expectOwnedPagesCleaned(harness);
+  });
+
+  it("renders Kakao dKaptcha and retries through the page client without login controls", async () => {
+    vi.useFakeTimers();
+    const harness = createBrowserHarness("captcha-success");
+    const login = loginToTistory(input, harness.ctx);
+    const assertion = expect(login).resolves.toMatchObject({ authenticated: true });
+
+    await vi.waitFor(() => expect(harness.kakaoCaptchaRender).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(2_100);
+    await assertion;
+
+    expect(harness.kakaoVerificationPoll).toHaveBeenCalledOnce();
     expectOwnedPagesCleaned(harness);
   });
 
