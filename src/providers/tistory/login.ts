@@ -27,6 +27,10 @@ export interface TistoryLoginResult {
 
 const AUTHENTICATION_WAIT_TIMEOUT_MS = 90_000;
 const AUTHENTICATION_POLL_INTERVAL_MS = 750;
+const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
+const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
+const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
+const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
@@ -40,14 +44,23 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
   const browser = await puppeteer.connect({
     browserWSEndpoint: ctx.capabilities.webSocketEndpoint("edge-cdp"),
     headers: { ...ctx.capabilities.headers },
+    protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
   });
   let isolatedContext: BrowserContext | undefined;
   let rootTarget: Target | undefined;
   let result: TistoryLoginResult | undefined;
   let actionError: unknown;
   try {
-    isolatedContext = await browser.createBrowserContext();
-    const page = await isolatedContext.newPage();
+    isolatedContext = await withTimeout(
+      browser.createBrowserContext(),
+      BROWSER_CONTEXT_CREATION_TIMEOUT_MS,
+      "Tistory isolated browser context creation timed out",
+    );
+    const page = await withTimeout(
+      isolatedContext.newPage(),
+      BROWSER_PAGE_CREATION_TIMEOUT_MS,
+      "Tistory isolated browser page creation timed out",
+    );
     rootTarget = page.target();
     result = await performLogin(input, ctx, host, origin, page);
   } catch (error) {
@@ -91,7 +104,10 @@ async function performLogin(
   origin: string,
   page: Page,
 ): Promise<TistoryLoginResult> {
-  await page.goto(`${origin}/manage/newpost`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/manage/newpost`, {
+    waitUntil: "domcontentloaded",
+    timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
+  });
   await openKakaoLoginIfNeeded(page);
   await fillCredentialsIfPresent(page, input.accountId, input.password);
   await submitCredentialsIfPresent(page, input.accountId, input.password);
@@ -340,4 +356,22 @@ function ownedTargetDepth(target: Target, rootTarget: Target): number {
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }

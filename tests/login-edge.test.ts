@@ -204,6 +204,40 @@ describe("Tistory Browser Edge login", () => {
     expect(browserMocks.connect).not.toHaveBeenCalled();
   });
 
+  it("fails closed when isolated browser context creation does not answer", async () => {
+    vi.useFakeTimers();
+    const ctx = mockContext(fetch);
+    const setVariable = vi.fn(async (path: string) => ({ path, revision: 1 }));
+    const setResource = vi.fn(async (path: string) => ({ path, revision: 1 }));
+    ctx.variables.set = setVariable;
+    ctx.resources.set = setResource;
+    ctx.capabilities = {
+      available: ["edge-cdp/v1"],
+      headers: { Authorization: "Bearer job-scoped-fixture" },
+      has: (capability) => capability === "edge-cdp/v1",
+      endpoint: () => "http://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
+      webSocketEndpoint: () => "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
+    };
+    const createBrowserContext = vi.fn(() => new Promise<never>(() => {}));
+    browserMocks.connect.mockResolvedValue({
+      createBrowserContext,
+      targets: () => [],
+      disconnect: browserMocks.disconnect,
+    });
+
+    const login = loginToTistory(input, ctx);
+    const assertion = expect(login).rejects.toThrow(
+      "Tistory isolated browser context creation timed out",
+    );
+    await vi.waitFor(() => expect(createBrowserContext).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(25_000);
+    await assertion;
+
+    expect(setVariable).not.toHaveBeenCalled();
+    expect(setResource).not.toHaveBeenCalled();
+    expect(browserMocks.disconnect).toHaveBeenCalledOnce();
+  });
+
   it("closes only the created target tree when the HumanTask is canceled", async () => {
     const harness = createBrowserHarness("cancel");
 
