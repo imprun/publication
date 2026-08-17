@@ -97,7 +97,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
           state: "fixture-state",
         };
       }
-      if (source.includes('prompt: "select_account"') && typeof argument === "string") {
+      if (source.includes("authorize.call") && typeof argument === "string") {
         kakaoAuthorize();
         currentURL = "https://accounts.kakao.com/login/";
         return undefined;

@@ -272,7 +272,6 @@ async function startKakaoAuthorization(
       authorize.call(auth, {
         redirectUri: `${window.location.origin}/auth/kakao/redirect`,
         state,
-        prompt: "select_account",
       });
     }, authState.state)
     .catch(() => {
