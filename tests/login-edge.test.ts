@@ -195,6 +195,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
       if (source.includes("sessionStorage")) return { fixture: "session" };
       return undefined;
     }),
+    waitForFunction: vi.fn(async () => undefined),
     waitForNavigation: vi.fn(async () => undefined),
     isClosed: () => rootClosed,
     close: vi.fn(async () => {
