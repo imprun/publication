@@ -17,6 +17,11 @@ const connectionAccess = {
 
 const loginAccess = {
   ...connectionAccess,
+  variables: [
+    ...connectionAccess.variables,
+    { scope: "app", path: "connections/tistory/default/account-id" },
+    { scope: "app", path: "connections/tistory/default/password" },
+  ],
   writeVariables: [
     {
       scope: "app",
@@ -36,6 +41,7 @@ export const app = defineApp({
       name: "connection.login",
       inputSchema: { path: "schemas/connection.login.input.schema.json" },
       outputSchema: { path: "schemas/connection.output.schema.json" },
+      operatorSettingsSchema: { path: "schemas/connection.login.settings.schema.json" },
       runsOn: ["browser"],
       runtimeAccess: loginAccess,
       handler: connectionLogin,

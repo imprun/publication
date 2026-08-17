@@ -6,6 +6,7 @@
     "connection.login": {
       "inputSchema": "schemas/connection.login.input.schema.json",
       "outputSchema": "schemas/connection.output.schema.json",
+      "operatorSettingsSchema": "schemas/connection.login.settings.schema.json",
       "runsOn": [
         "browser"
       ],
@@ -14,6 +15,14 @@
           {
             "scope": "app",
             "path": "connections/tistory/default/session"
+          },
+          {
+            "scope": "app",
+            "path": "connections/tistory/default/account-id"
+          },
+          {
+            "scope": "app",
+            "path": "connections/tistory/default/password"
           }
         ],
         "resources": [

@@ -41,6 +41,10 @@ describe("Tistory Browser Edge login", () => {
       evaluate: vi.fn(async () => false),
       click: vi.fn(async () => {}),
     };
+    const submit = {
+      isVisible: vi.fn(async () => true),
+      click: vi.fn(async () => {}),
+    };
     const loginLocator = { fill: vi.fn(async () => {}) };
     const passwordLocator = { fill: vi.fn(async () => {}) };
     const page = {
@@ -48,8 +52,10 @@ describe("Tistory Browser Edge login", () => {
       $: vi.fn(async (selector: string) => {
         if (selector.includes("loginId")) return loginID;
         if (selector.includes("password")) return password;
+        if (selector.includes('button[type="submit"]')) return submit;
         return saveSignedIn;
       }),
+      waitForNavigation: vi.fn(async () => null),
       locator: vi.fn((selector: string) => {
         if (selector.includes("loginId")) return loginLocator;
         return passwordLocator;
@@ -79,6 +85,9 @@ describe("Tistory Browser Edge login", () => {
     expect(page.goto).toHaveBeenCalledWith("https://example.tistory.com/manage/newpost", {
       waitUntil: "domcontentloaded",
     });
+    expect(loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
+    expect(passwordLocator.fill).toHaveBeenCalledWith("fixture-only");
+    expect(submit.click).toHaveBeenCalledOnce();
     expect(browserMocks.disconnect).toHaveBeenCalledOnce();
   });
 });

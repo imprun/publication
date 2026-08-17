@@ -33,13 +33,14 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
     await page.goto(`${origin}/manage/newpost`, { waitUntil: "domcontentloaded" });
     await openKakaoLoginIfNeeded(page);
     await fillCredentialsIfPresent(page, input.accountId, input.password);
+    await submitCredentialsIfPresent(page, input.accountId, input.password);
 
     const decision = await waitForHumanDecision<LoginApproval>(ctx, {
       key: "tistory-kakao-login",
       kind: "form",
       title: "카카오 로그인을 완료해 주세요",
       description:
-        "열린 브라우저에서 로그인 버튼을 직접 누르고 2단계 인증까지 끝낸 뒤 승인해 주세요.",
+        "계정 입력과 로그인을 자동 제출했습니다. 열린 브라우저에서 CAPTCHA 또는 2단계 인증을 끝낸 뒤 승인해 주세요.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -137,6 +138,17 @@ async function fillCredentialsIfPresent(page: Page, accountId?: string, password
   ) {
     await saveSignedIn.click();
   }
+}
+
+async function submitCredentialsIfPresent(page: Page, accountId?: string, password?: string) {
+  if (!accountId || !password) return;
+  const submit = await page.$('button[type="submit"]');
+  if (!submit || !(await submit.isVisible().catch(() => false))) return;
+  const navigation = page
+    .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
+    .catch(() => null);
+  await submit.click();
+  await navigation;
 }
 
 async function verifyAuthenticated(page: Page, origin: string, host: string): Promise<void> {

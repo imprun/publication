@@ -4,6 +4,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.secrets/
 playwright-report/
 test-results/
 .serena/cache/
