@@ -18,9 +18,18 @@ interface LoginApproval {
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
   const host = normalizeTistoryHost(input.blogHost);
   const origin = tistoryOrigin(host);
+  if (!ctx.capabilities?.has("edge-cdp/v1")) {
+    throw new Error("Tistory login requires an assigned edge-cdp BrowserSession");
+  }
   const { chromium } = await loadPlaywright();
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
+  const browser = await chromium.connectOverCDP(ctx.capabilities.webSocketEndpoint("edge-cdp"), {
+    headers: { ...ctx.capabilities.headers },
+  });
+  const context = browser.contexts()[0];
+  if (!context) {
+    await browser.close();
+    throw new Error("The assigned edge-cdp browser has no persistent context");
+  }
   const page = await context.newPage();
   try {
     await page.goto(`${origin}/manage/newpost`, { waitUntil: "domcontentloaded" });

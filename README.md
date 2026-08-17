@@ -6,8 +6,9 @@ the backend contract is complete.
 
 ## Backend flow
 
-1. `connection.login` opens a visible Playwright browser, fills the Kakao account
-   fields, and waits for the person to submit login and complete 2FA.
+1. `connection.login` connects Playwright to the Job-scoped `edge-cdp` capability,
+   opens a page in the user's visible Chrome, fills the Kakao account fields, and
+   waits for the person to submit login and complete 2FA.
 2. The action writes the Playwright session to the App-owned Secret Variable
    `connections/tistory/default/session`.
 3. It writes safe connection metadata to the App-owned Resource
@@ -45,8 +46,10 @@ Before publishing the App Release, register the workspace-owned ResourceType
 `publication.connection@1` using
 `resource-types/publication.connection@1.schema.json`.
 
-The Worker selected for `connection.login` must have the `browser` label and a
-visible browser display. Other actions do not require browser placement.
+The Worker selected for `connection.login` must advertise the `browser` label
+through a ready worker-local capability gateway. Chrome remains on the enrolled
+Edge device; the Worker receives only a Job-scoped BrowserSession. Other actions
+do not require browser placement.
 
 ## Commands
 
