@@ -20,7 +20,8 @@ export interface TistoryLoginResult {
   authenticated: true;
 }
 
-const AUTHENTICATION_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+const KAKAO_AUTHENTICATION_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+const TISTORY_SESSION_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 const AUTHENTICATION_POLL_INTERVAL_MS = 1_000;
 const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
 const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
@@ -117,12 +118,22 @@ async function performLogin(
   browserContext: BrowserContext,
   page: Page,
 ): Promise<TistoryLoginResult> {
-  const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+  const kakaoDeadline = Date.now() + KAKAO_AUTHENTICATION_WAIT_TIMEOUT_MS;
   await installKakaoAccountRuntimeProbe(page);
   await startKakaoAuthorization(page, `${origin}/manage/newpost`, input.accountId);
-  await authenticateKakaoAccountWithPageJavaScript(page, input.accountId, input.password, deadline);
+  await authenticateKakaoAccountWithPageJavaScript(
+    page,
+    input.accountId,
+    input.password,
+    kakaoDeadline,
+  );
 
-  await waitForAuthenticatedSession(page, origin, host, deadline);
+  await waitForAuthenticatedSession(
+    page,
+    origin,
+    host,
+    Date.now() + TISTORY_SESSION_WAIT_TIMEOUT_MS,
+  );
   const capturedAt = new Date().toISOString();
   const storageState = await captureStorageState(browserContext, page, origin);
   if (

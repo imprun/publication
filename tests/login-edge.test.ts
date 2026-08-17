@@ -23,6 +23,7 @@ type LoginOutcome =
   | "automatic-success"
   | "captcha-success"
   | "two-step-success"
+  | "late-two-step-success"
   | "tistory-home"
   | "authentication-failure"
   | "runtime-unavailable"
@@ -87,7 +88,9 @@ function createBrowserHarness(outcome: LoginOutcome) {
         kakaoAuthenticate(argument);
         if (outcome === "runtime-unavailable") return "runtime-unavailable";
         if (outcome === "authentication-failure") return "two-step-pending";
-        if (outcome === "two-step-success") return "two-step-pending";
+        if (outcome === "two-step-success" || outcome === "late-two-step-success") {
+          return "two-step-pending";
+        }
         if (outcome === "captcha-success") return "captcha-required";
         authenticated = true;
         currentURL =
@@ -99,10 +102,14 @@ function createBrowserHarness(outcome: LoginOutcome) {
       if (source.includes("check_tms_for_two_step_verification")) {
         kakaoVerificationPoll();
         verificationPolls += 1;
-        if (
+        const approved =
           (outcome === "two-step-success" && verificationPolls >= 2) ||
-          outcome === "captcha-success"
-        ) {
+          (outcome === "late-two-step-success" && verificationPolls >= 1) ||
+          outcome === "captcha-success";
+        if (approved) {
+          if (outcome === "late-two-step-success") {
+            vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+          }
           authenticated = true;
           currentURL = "https://example.tistory.com/manage/newpost";
           return "navigating";
@@ -292,6 +299,22 @@ describe("Tistory Browser Edge login", () => {
 
     expect(harness.kakaoVerificationPoll).toHaveBeenCalledTimes(2);
     expect(harness.managementNavigations).toEqual([]);
+    expectOwnedPagesCleaned(harness);
+  });
+
+  it("gives Tistory session establishment a fresh deadline after late Kakao approval", async () => {
+    vi.useFakeTimers();
+    const harness = createBrowserHarness("late-two-step-success");
+    const login = loginToTistory(input, harness.ctx);
+    const assertion = expect(login).resolves.toMatchObject({ authenticated: true });
+
+    await vi.waitFor(() => expect(harness.kakaoAuthenticate).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(1_100);
+    await assertion;
+
+    expect(harness.kakaoVerificationPoll).toHaveBeenCalledOnce();
+    expect(harness.setVariable).toHaveBeenCalledOnce();
+    expect(harness.setResource).toHaveBeenCalledOnce();
     expectOwnedPagesCleaned(harness);
   });
 

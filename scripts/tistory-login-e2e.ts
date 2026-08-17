@@ -364,13 +364,13 @@ async function main() {
   const draft = createExampleDraft(markdown);
 
   console.log(
-    "Starting connection.login. Complete Kakao CAPTCHA in Browser Edge if shown, then approve the device notification.",
+    "Starting connection.login. Complete Kakao CAPTCHA in Browser Edge if shown, approve the device notification, then approve Tistory OAuth in Browser Edge if shown.",
   );
   const login = await runAction<ConnectionResult>(
     options.context,
     LOGIN_ACTION,
     runInput,
-    11 * 60 * 1000,
+    21 * 60 * 1000,
   );
   const status = await runAction<ConnectionResult>(
     options.context,
