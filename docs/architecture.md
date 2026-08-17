@@ -66,10 +66,11 @@ The supplied login HAR defines the current Kakao adapter state machine:
 Tistory callback. Browser isolation supplies the origin security model, current
 CSRF/encryption/user-agent context, and the cookie/storage jar. The adapter uses
 the page-loaded Kakao Account client for authentication and verification polling,
-plus top-level origin navigation; it does not query, fill, click, or submit
-elements from the rendered page. No separate login HumanTask completion signal is
-used. Session state is persisted only after the read-only Tistory management API
-succeeds.
+plus top-level origin navigation. It does not query, fill, click, or submit login
+controls. A Kakao-issued dKaptcha challenge is rendered with Kakao's own widget
+and completed by the user in Browser Edge. No separate login HumanTask completion
+signal is used. Session state is persisted only after the read-only Tistory
+management API succeeds.
 
 The first release deliberately supports one exact connection path (`default`).
 Dynamic account paths are deferred because the Core authorization contract is

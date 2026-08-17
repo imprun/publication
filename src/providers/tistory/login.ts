@@ -30,6 +30,7 @@ const KAKAO_SDK_READY_TIMEOUT_MS = 10_000;
 const KAKAO_ACCOUNT_JAVASCRIPT_READY_TIMEOUT_MS = 20_000;
 const KAKAO_LOGIN_STATE_KEY = "publication.tistory.kakao-login";
 const KAKAO_ROOT_MODULE_KEY = "publication.tistory.kakao-root-module";
+const KAKAO_CAPTCHA_MAX_ATTEMPTS = 3;
 const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
@@ -292,6 +293,7 @@ async function installKakaoAccountRuntimeProbe(page: Page): Promise<void> {
 
 type KakaoAuthenticationState =
   | "runtime-unavailable"
+  | "captcha-required"
   | "two-step-pending"
   | "navigating"
   | "rejected"
@@ -316,6 +318,14 @@ async function authenticateKakaoAccountWithPageJavaScript(
   }
   if (state === "runtime-unavailable") {
     throw new Error("Kakao account JavaScript client did not become ready");
+  }
+  let captchaAttempts = 0;
+  while (state === "captcha-required") {
+    captchaAttempts += 1;
+    if (captchaAttempts > KAKAO_CAPTCHA_MAX_ATTEMPTS) {
+      throw new Error("Kakao CAPTCHA verification exceeded the retry limit");
+    }
+    state = await waitForKakaoCaptchaAndRetry(page, deadline);
   }
   if (state === "rejected" || state.startsWith("rejected:")) {
     const status = state.includes(":") ? state.slice(state.indexOf(":") + 1) : "unknown";
@@ -445,22 +455,40 @@ async function callKakaoAuthenticate(
           p: encodeHint(userAgentData?.platform),
         };
 
+        const loginInput = {
+          loginId: accountId,
+          loginKey: accountId,
+          password,
+          staySignedIn: false,
+          saveSignedIn: false,
+          loginUrl,
+          lang,
+          security_context: { a: [], b: browserHints, c: false, d: [] },
+        };
         let response: unknown;
         try {
-          response = await client.call("authenticate", {
-            loginId: accountId,
-            loginKey: accountId,
-            password,
-            staySignedIn: false,
-            saveSignedIn: false,
-            loginUrl,
-            lang,
-            security_context: { a: [], b: browserHints, c: false, d: [] },
-          });
+          response = await client.call("authenticate", loginInput);
         } catch {
           return "rejected";
         }
         if (!response || typeof response !== "object") return "rejected:invalid-response";
+        const status = Reflect.get(response, "status");
+        if (status === -481 || status === -482) {
+          const challenge = Reflect.get(response, "dkaptcha");
+          const src =
+            challenge && typeof challenge === "object" ? Reflect.get(challenge, "src") : null;
+          const widgetId =
+            challenge && typeof challenge === "object" ? Reflect.get(challenge, "widgetId") : null;
+          if (typeof src !== "string" || typeof widgetId !== "string") {
+            return `rejected:${status}` as KakaoAuthenticationState;
+          }
+          Reflect.set(window, Symbol.for(stateKey), {
+            challenge: { src, widgetId },
+            client,
+            loginInput,
+          });
+          return "captcha-required";
+        }
         const continueUrl = Reflect.get(response, "continueUrl");
         if (typeof continueUrl === "string" && continueUrl.length > 0) {
           setTimeout(() => window.location.assign(continueUrl), 0);
@@ -468,7 +496,6 @@ async function callKakaoAuthenticate(
         }
         const token = Reflect.get(response, "token");
         if (typeof token !== "string" || token.length === 0) {
-          const status = Reflect.get(response, "status");
           const safeStatus =
             typeof status === "number"
               ? String(status)
@@ -488,6 +515,146 @@ async function callKakaoAuthenticate(
       },
     )
     .catch(() => "runtime-unavailable" as const);
+}
+
+async function waitForKakaoCaptchaAndRetry(
+  page: Page,
+  deadline: number,
+): Promise<KakaoAuthenticationState> {
+  const initialized = await page
+    .evaluate(async (stateKey) => {
+      type DkaptchaAPI = {
+        render(
+          elementId: string,
+          options: {
+            widget: string;
+            theme: "white";
+            language: "ko" | "en";
+            option: "iframe";
+          },
+        ): {
+          addCallbackListener(callback: (result: { token?: unknown }) => void): void;
+        };
+      };
+      type CaptchaState = {
+        captchaToken?: string;
+        challenge?: { src?: string; widgetId?: string };
+        overlay?: HTMLElement;
+      };
+      const loginState = Reflect.get(window, Symbol.for(stateKey)) as CaptchaState | undefined;
+      const challenge = loginState?.challenge;
+      if (!loginState || !challenge?.src || !challenge.widgetId) return false;
+      const scriptURL = new URL(challenge.src, window.location.origin);
+      const trustedHost =
+        scriptURL.hostname === "kakao.com" ||
+        scriptURL.hostname.endsWith(".kakao.com") ||
+        scriptURL.hostname === "kakaocdn.net" ||
+        scriptURL.hostname.endsWith(".kakaocdn.net");
+      if (scriptURL.protocol !== "https:" || !trustedHost) return false;
+
+      loginState.overlay?.remove();
+      const overlay = document.createElement("main");
+      overlay.id = `publication-dkaptcha-${Date.now()}`;
+      overlay.style.cssText =
+        "position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;background:#fff;color:#111";
+      document.body.appendChild(overlay);
+      document.title = "Kakao verification";
+      loginState.overlay = overlay;
+
+      const globalObject = window as typeof window & { dkaptcha?: DkaptchaAPI };
+      if (!globalObject.dkaptcha) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = scriptURL.href;
+          script.async = true;
+          script.addEventListener("load", () => resolve(), { once: true });
+          script.addEventListener("error", () => reject(new Error("CAPTCHA load failed")), {
+            once: true,
+          });
+          document.head.appendChild(script);
+        });
+      }
+      if (!globalObject.dkaptcha) return false;
+      globalObject.dkaptcha
+        .render(overlay.id, {
+          widget: challenge.widgetId,
+          theme: "white",
+          language: navigator.language.startsWith("ko") ? "ko" : "en",
+          option: "iframe",
+        })
+        .addCallbackListener((result) => {
+          if (typeof result.token === "string" && result.token.length > 0) {
+            loginState.captchaToken = result.token;
+          }
+        });
+      return true;
+    }, KAKAO_LOGIN_STATE_KEY)
+    .catch(() => false);
+  if (!initialized) throw new Error("Kakao CAPTCHA widget could not be initialized");
+
+  while (Date.now() < deadline) {
+    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+    const state = await page
+      .evaluate(async (stateKey) => {
+        type KakaoClient = {
+          call(action: string, input: Record<string, unknown>): Promise<unknown>;
+        };
+        type CaptchaState = {
+          captchaToken?: string;
+          challenge?: { src?: string; widgetId?: string };
+          client?: KakaoClient;
+          loginInput?: Record<string, unknown>;
+          overlay?: HTMLElement;
+          token?: string;
+        };
+        const loginState = Reflect.get(window, Symbol.for(stateKey)) as CaptchaState | undefined;
+        if (!loginState?.captchaToken) return "captcha-waiting";
+        if (!loginState.client || !loginState.loginInput) return "rejected";
+        const captchaToken = loginState.captchaToken;
+        delete loginState.captchaToken;
+        loginState.overlay?.remove();
+        delete loginState.overlay;
+
+        let response: unknown;
+        try {
+          response = await loginState.client.call("authenticate", {
+            ...loginState.loginInput,
+            captchaToken,
+          });
+        } catch {
+          return "rejected:network";
+        }
+        if (!response || typeof response !== "object") return "rejected:invalid-response";
+        const status = Reflect.get(response, "status");
+        if (status === -481 || status === -482) {
+          const challenge = Reflect.get(response, "dkaptcha");
+          const src =
+            challenge && typeof challenge === "object" ? Reflect.get(challenge, "src") : null;
+          const widgetId =
+            challenge && typeof challenge === "object" ? Reflect.get(challenge, "widgetId") : null;
+          if (typeof src !== "string" || typeof widgetId !== "string") {
+            return `rejected:${status}`;
+          }
+          loginState.challenge = { src, widgetId };
+          return "captcha-required";
+        }
+        const continueUrl = Reflect.get(response, "continueUrl");
+        if (typeof continueUrl === "string" && continueUrl.length > 0) {
+          setTimeout(() => window.location.assign(continueUrl), 0);
+          return "navigating";
+        }
+        const token = Reflect.get(response, "token");
+        if (typeof token === "string" && token.length > 0) {
+          loginState.token = token;
+          return "two-step-pending";
+        }
+        const safeStatus = typeof status === "number" ? String(status) : "unknown";
+        return `rejected:${safeStatus}`;
+      }, KAKAO_LOGIN_STATE_KEY)
+      .catch(() => "rejected" as const);
+    if (state !== "captcha-waiting") return state as KakaoAuthenticationState;
+  }
+  throw new Error("Kakao CAPTCHA verification did not complete before the login deadline");
 }
 
 async function pollKakaoTwoStepVerification(page: Page): Promise<KakaoAuthenticationState> {

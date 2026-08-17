@@ -11,8 +11,9 @@ the backend contract is complete.
    origin-aware JavaScript runtime and cookie/storage jar. It starts the Tistory
    OAuth transaction with `Kakao.Auth.authorize()`, then calls the Kakao Account
    page's loaded client for `authenticate` and one-second phone-approval polling.
-   It never queries, fills, or clicks page elements. The persisted Run input
-   contains only the public Tistory blog host.
+   It never queries, fills, or clicks login controls. If Kakao returns a dKaptcha
+   challenge, the page renders Kakao's own widget for the user before retrying.
+   The persisted Run input contains only the public Tistory blog host.
 2. The action writes the Chrome session to the App-owned Secret Variable
    `connections/tistory/default/session`.
 3. It writes safe connection metadata to the App-owned Resource
@@ -96,8 +97,9 @@ KAKAO_LOGINPWD=your-kakao-password
 npm run e2e:tistory-login -- --context junsik-cloud --blog-host pak2251.tistory.com --env .env
 ```
 
-If Kakao sends a phone approval request, approve it on the registered device; the
-action checks the page-owned verification state every second. After login, the
+Complete Kakao's own CAPTCHA in the Browser Edge tab if it appears. If Kakao then
+sends a phone approval request, approve it on the registered device; the action
+checks the page-owned verification state every second. After login, the
 CLI creates a private post approval task in Imprun Cloud and waits for the user to
 approve it. Use `--markdown <path>` to replace the example Markdown, or
 `--configure-only` to rotate the Secret Variables without starting a Run. Remove
