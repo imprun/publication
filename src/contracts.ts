@@ -12,8 +12,8 @@ const connectionFields = {
 export const connectionLoginInputSchema = z.object({
   ...connectionFields,
   blogHost: z.string().trim().min(1),
-  accountId: z.string().trim().min(1),
-  password: z.string().min(1),
+  accountId: z.string().trim().min(1).optional(),
+  password: z.string().min(1).optional(),
 });
 
 export const connectionInputSchema = z.object(connectionFields);
