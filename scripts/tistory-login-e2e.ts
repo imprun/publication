@@ -248,7 +248,7 @@ async function createLoginRun(context: string, blogHost: string): Promise<RunVie
 }
 
 async function waitForLoginProgress(context: string, runId: string): Promise<LoginProgress> {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 11 * 60 * 1000;
   while (Date.now() < deadline) {
     const list = await imprunJson<HumanTaskList>(context, [
       "api",
