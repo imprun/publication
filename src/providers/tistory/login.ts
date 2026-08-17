@@ -26,10 +26,8 @@ const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
 const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
-const KAKAO_SDK_READY_TIMEOUT_MS = 10_000;
-const KAKAO_LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
-const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
-const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
+const LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
+const KAKAO_ACCOUNT_INPUT_SELECTOR = 'input[name="loginKey"], input[name="loginId"]';
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
@@ -115,9 +113,13 @@ async function performLogin(
   page: Page,
 ): Promise<TistoryLoginResult> {
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
-  await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
-  await submitKakaoLoginWithPageJavaScript(page, input.accountId, input.password);
-  await page.bringToFront();
+  await page.goto(`${origin}/manage/newpost`, {
+    waitUntil: "domcontentloaded",
+    timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
+  });
+  await openKakaoLoginIfNeeded(page);
+  await fillCredentials(page, input.accountId, input.password);
+  await submitCredentials(page);
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();
@@ -171,172 +173,84 @@ async function loadPuppeteer(): Promise<typeof import("puppeteer-core")> {
   return import(["puppeteer", "-core"].join(""));
 }
 
-async function startKakaoAuthorization(
-  page: Page,
-  redirectUrl: string,
-  deadline: number,
-): Promise<void> {
-  const loginUrl = new URL(TISTORY_LOGIN_URL);
-  loginUrl.searchParams.set("redirectUrl", redirectUrl);
-  await page.goto(loginUrl.href, {
+async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
+  await page
+    .waitForSelector(`${KAKAO_ACCOUNT_INPUT_SELECTOR}, a.btn_login.link_kakao_id`, {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  if (await isVisible(page, KAKAO_ACCOUNT_INPUT_SELECTOR)) return;
+  const kakaoButton = await page.$("a.btn_login.link_kakao_id");
+  if (!kakaoButton || !(await kakaoButton.isVisible().catch(() => false))) return;
+
+  const navigation = page.waitForNavigation({
     waitUntil: "domcontentloaded",
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
-
-  await page
-    .waitForFunction(
-      () => {
-        const kakao = Reflect.get(window, "Kakao");
-        if (!kakao || typeof kakao !== "object") return false;
-        const auth = Reflect.get(kakao, "Auth");
-        const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
-        const isInitialized = Reflect.get(kakao, "isInitialized");
-        return (
-          typeof authorize === "function" &&
-          typeof isInitialized === "function" &&
-          isInitialized.call(kakao) === true
-        );
-      },
-      { timeout: KAKAO_SDK_READY_TIMEOUT_MS },
-    )
-    .catch(() => {
-      throw new Error("Tistory Kakao SDK did not initialize before the login deadline");
-    });
-
-  const authState = await page
-    .evaluate(
-      async ({ stateEndpoint, redirectUrl }) => {
-        const stateResponse = await fetch(stateEndpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ redirectUrl, isPopup: false }),
-          credentials: "include",
-        });
-        const payload = await stateResponse.json().catch(() => null);
-        const state =
-          payload && typeof payload === "object" ? Reflect.get(payload, "data") : undefined;
-        const kakao = Reflect.get(window, "Kakao");
-        const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
-        const authorize =
-          auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : undefined;
-        return {
-          httpStatus: stateResponse.status,
-          ready: stateResponse.ok && typeof state === "string" && typeof authorize === "function",
-          state: typeof state === "string" ? state : undefined,
-        };
-      },
-      { stateEndpoint: TISTORY_KAKAO_AUTH_STATE_ENDPOINT, redirectUrl },
-    )
-    .catch(() => null);
-  if (!authState?.ready || !authState.state) {
-    throw new Error(`Tistory Kakao authorization failed at ${safePageLocation(page.url())}`);
-  }
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
-  const navigation = page.waitForNavigation({
-    waitUntil: "domcontentloaded",
-    timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
-  });
-  try {
-    await page.evaluate((state) => {
-      const kakao = Reflect.get(window, "Kakao");
-      const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
-      const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
-      if (typeof authorize !== "function") throw new Error("Kakao authorize API is unavailable");
-      authorize.call(auth, {
-        redirectUri: `${window.location.origin}/auth/kakao/redirect`,
-        state,
-      });
-    }, authState.state);
-  } catch {
-    await navigation.catch(() => null);
-    throw new Error("Tistory Kakao SDK authorization failed");
-  }
+  await kakaoButton.evaluate((element) => (element as HTMLElement).click());
   await navigation;
 }
 
-async function submitKakaoLoginWithPageJavaScript(
-  page: Page,
-  accountId: string,
-  password: string,
-): Promise<void> {
-  await page
-    .waitForFunction(
-      () => {
-        const account = document.querySelector<HTMLInputElement>(
-          'input[name="loginKey"], input[name="loginId"]',
-        );
-        const password = document.querySelector<HTMLInputElement>('input[name="password"]');
-        const form = account?.form ?? password?.form;
-        const submitter =
-          form?.querySelector<HTMLButtonElement | HTMLInputElement>(
-            'button[type="submit"], input[type="submit"]',
-          ) ??
-          document.querySelector<HTMLButtonElement | HTMLInputElement>(
-            'button[type="submit"], input[type="submit"]',
-          );
-        return Boolean(account && password && (form || submitter));
-      },
-      { timeout: KAKAO_LOGIN_FORM_READY_TIMEOUT_MS },
-    )
-    .catch(() => {
-      throw new Error("Kakao login JavaScript did not become ready");
-    });
-
-  const prepared = await page
-    .evaluate(
-      ({ accountId, password }) => {
-        const account = document.querySelector<HTMLInputElement>(
-          'input[name="loginKey"], input[name="loginId"]',
-        );
-        const passwordInput = document.querySelector<HTMLInputElement>('input[name="password"]');
-        if (!account || !passwordInput) return false;
-
-        const valueSetter = Object.getOwnPropertyDescriptor(
-          HTMLInputElement.prototype,
-          "value",
-        )?.set;
-        if (!valueSetter) return false;
-        const setValue = (input: HTMLInputElement, value: string) => {
-          valueSetter.call(input, value);
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-        };
-        setValue(account, accountId);
-        setValue(passwordInput, password);
-        return true;
-      },
-      { accountId, password },
-    )
-    .catch(() => false);
-  if (!prepared) throw new Error("Kakao login JavaScript could not prepare credentials");
-
-  await sleep(50);
-  const submitted = await page
-    .evaluate(() => {
-      const account = document.querySelector<HTMLInputElement>(
-        'input[name="loginKey"], input[name="loginId"]',
-      );
-      const passwordInput = document.querySelector<HTMLInputElement>('input[name="password"]');
-      const form = account?.form ?? passwordInput?.form;
-      const submitter =
-        form?.querySelector<HTMLButtonElement | HTMLInputElement>(
-          'button[type="submit"], input[type="submit"]',
-        ) ??
-        document.querySelector<HTMLButtonElement | HTMLInputElement>(
-          'button[type="submit"], input[type="submit"]',
-        );
-      if (submitter) {
-        setTimeout(() => submitter.click(), 0);
-      } else if (form && typeof form.requestSubmit === "function") {
-        setTimeout(() => form.requestSubmit(), 0);
-      } else {
-        return false;
-      }
-      return true;
+async function fillCredentials(page: Page, accountId: string, password: string) {
+  const accountInput = await page
+    .waitForSelector(KAKAO_ACCOUNT_INPUT_SELECTOR, {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
     })
-    .catch(() => false);
-  if (!submitted) throw new Error("Kakao login JavaScript submission failed");
+    .catch(() => null);
+  if (!accountInput) {
+    throw new Error(
+      `Kakao account input was not available for automatic login at ${safePageLocation(page.url())}`,
+    );
+  }
+  const accountInputName = await accountInput.evaluate((element) => element.getAttribute("name"));
+  if (accountInputName !== "loginKey" && accountInputName !== "loginId") {
+    throw new Error("Kakao account input was not recognized for automatic login");
+  }
+  const passwordInput = await page
+    .waitForSelector('input[name="password"]', {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  if (!passwordInput) {
+    throw new Error(
+      `Kakao password input was not available for automatic login at ${safePageLocation(page.url())}`,
+    );
+  }
+  await page.locator(`input[name="${accountInputName}"]`).fill(accountId);
+  await page.locator('input[name="password"]').fill(password);
+  const saveSignedIn = await page.$('input[name="saveSignedIn"]');
+  if (
+    saveSignedIn &&
+    (await saveSignedIn.isVisible().catch(() => false)) &&
+    (await saveSignedIn.evaluate((element) => (element as HTMLInputElement).checked))
+  ) {
+    await saveSignedIn.click();
+  }
+}
+
+async function submitCredentials(page: Page) {
+  const submit = await page
+    .waitForSelector('button[type="submit"]', {
+      visible: true,
+      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  if (!submit) {
+    throw new Error(
+      `Kakao login submit control was not available for automatic login at ${safePageLocation(page.url())}`,
+    );
+  }
+  const navigation = page
+    .waitForNavigation({
+      waitUntil: "domcontentloaded",
+      timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  await submit.click();
+  await navigation;
 }
 
 function isPostAuthenticationTistoryURL(url: URL, host: string): boolean {
@@ -401,6 +315,11 @@ async function isAuthenticatedManagementSession(
       return response.status >= 200 && response.status < 300 && contentType.includes("json");
     }, apiURL)
     .catch(() => false);
+}
+
+async function isVisible(page: Page, selector: string): Promise<boolean> {
+  const element = await page.$(selector);
+  return element ? element.isVisible().catch(() => false) : false;
 }
 
 function parsePageURL(value: string): URL | undefined {
