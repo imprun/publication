@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
-import type { Browser, Page, Target } from "puppeteer-core";
+import type { Browser, BrowserContext, Page, Target } from "puppeteer-core";
 import {
   TISTORY_CONNECTION_RESOURCE_TYPE,
   TISTORY_PROFILE_PATH,
@@ -41,12 +41,13 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
     browserWSEndpoint: ctx.capabilities.webSocketEndpoint("edge-cdp"),
     headers: { ...ctx.capabilities.headers },
   });
+  let isolatedContext: BrowserContext | undefined;
   let rootTarget: Target | undefined;
   let result: TistoryLoginResult | undefined;
   let actionError: unknown;
   try {
-    const context = browser.defaultBrowserContext();
-    const page = await context.newPage();
+    isolatedContext = await browser.createBrowserContext();
+    const page = await isolatedContext.newPage();
     rootTarget = page.target();
     result = await performLogin(input, ctx, host, origin, page);
   } catch (error) {
@@ -56,6 +57,11 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
   const cleanupErrors: unknown[] = [];
   try {
     if (rootTarget) await closeOwnedTargetTree(browser, rootTarget);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    if (isolatedContext) await isolatedContext.close();
   } catch (error) {
     cleanupErrors.push(error);
   }
