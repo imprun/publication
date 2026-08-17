@@ -106,6 +106,13 @@ function createBrowserHarness(outcome: HumanOutcome, startsAtTistoryLogin = fals
       return saveSignedIn;
     }),
     waitForNavigation: vi.fn(async () => null),
+    waitForSelector: vi.fn(async (selector: string) => {
+      if (selector.includes("a.btn_login.link_kakao_id") && !atKakaoLogin) return kakaoButton;
+      if (selector.includes("loginId")) return loginID;
+      if (selector.includes("password")) return password;
+      if (selector.includes('button[type="submit"]')) return submit;
+      return null;
+    }),
     locator: vi.fn((selector: string) => {
       if (selector.includes("loginId")) return loginLocator;
       return passwordLocator;
