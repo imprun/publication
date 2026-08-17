@@ -57,7 +57,7 @@ function createBrowserHarness(outcome: HumanOutcome) {
     }),
   };
   const popupTarget = {
-    opener: () => rootTarget,
+    opener: () => undefined,
     page: vi.fn(async () => popupPage),
   };
   const submit = {
@@ -123,9 +123,20 @@ function createBrowserHarness(outcome: HumanOutcome) {
       targets.push(rootTarget);
       return page;
     }),
+    close: vi.fn(async () => {
+      rootClosed = true;
+      popupClosed = true;
+      for (const target of [rootTarget, popupTarget]) {
+        const index = targets.indexOf(target);
+        if (index >= 0) targets.splice(index, 1);
+      }
+    }),
   };
   browserMocks.connect.mockResolvedValue({
-    defaultBrowserContext: () => browserContext,
+    createBrowserContext: vi.fn(async () => browserContext),
+    defaultBrowserContext: vi.fn(() => {
+      throw new Error("default BrowserContext must not be used for login");
+    }),
     targets: () => [...targets],
     disconnect: browserMocks.disconnect,
   });
@@ -154,6 +165,7 @@ function createBrowserHarness(outcome: HumanOutcome) {
     ctx,
     page,
     popupPage,
+    browserContext,
     originalPage,
     loginLocator,
     passwordLocator,
@@ -167,7 +179,8 @@ function createBrowserHarness(outcome: HumanOutcome) {
 
 function expectOwnedTargetsCleaned(harness: ReturnType<typeof createBrowserHarness>) {
   expect(harness.page.close).toHaveBeenCalledOnce();
-  expect(harness.popupPage.close).toHaveBeenCalledOnce();
+  expect(harness.browserContext.close).toHaveBeenCalledOnce();
+  expect(harness.popupPage.isClosed()).toBe(true);
   expect(harness.originalPage.close).not.toHaveBeenCalled();
   expect(harness.targets).toHaveLength(harness.baselineTargetCount);
   expect(browserMocks.disconnect).toHaveBeenCalledOnce();
