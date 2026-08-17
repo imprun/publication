@@ -28,6 +28,20 @@ type LoginOutcome =
   | "untrusted-continuation";
 
 function createBrowserHarness(outcome: LoginOutcome) {
+  const kakaoLoginHtml = `<script id="__NEXT_DATA__">${JSON.stringify({
+    props: {
+      pageProps: {
+        pageContext: {
+          commonContext: {
+            _csrf: "fixture-csrf",
+            locale: "ko",
+            p: "fixture-passphrase",
+          },
+          context: { loginUrl: "fixture-login-url" },
+        },
+      },
+    },
+  })}</script>`;
   let currentURL = "about:blank";
   let authenticated = false;
   let authenticationPolls = 0;
@@ -102,22 +116,15 @@ function createBrowserHarness(outcome: LoginOutcome) {
         currentURL = "https://accounts.kakao.com/login/";
         return undefined;
       }
-      if (source.includes("__NEXT_DATA__")) {
+      if (source.includes("getHighEntropyValues"))
         return {
-          csrf: "fixture-csrf",
-          encryptionPassphrase: "fixture-passphrase",
-          loginUrl: "fixture-login-url",
-          locale: "ko",
-          userAgentHints: {
-            a: "783836",
-            b: "3634",
-            m: "",
-            mo: 0,
-            p: "57696e646f7773",
-            pv: "31352e30",
-          },
+          a: "783836",
+          b: "3634",
+          m: "",
+          mo: 0,
+          p: "57696e646f7773",
+          pv: "31352e30",
         };
-      }
       if (argument && typeof argument === "object") {
         const request = argument as {
           endpoint?: string;
@@ -196,7 +203,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
       return undefined;
     }),
     waitForFunction: vi.fn(async () => undefined),
-    waitForNavigation: vi.fn(async () => undefined),
+    waitForNavigation: vi.fn(async () => ({ text: async () => kakaoLoginHtml })),
     isClosed: () => rootClosed,
     close: vi.fn(async () => {
       rootClosed = true;

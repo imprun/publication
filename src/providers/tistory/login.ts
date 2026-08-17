@@ -142,8 +142,8 @@ async function performLogin(
   page: Page,
 ): Promise<TistoryLoginResult> {
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
-  await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
-  await authenticateKakaoAccount(page, input.accountId, input.password, deadline);
+  const kakaoLoginHtml = await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
+  await authenticateKakaoAccount(page, input.accountId, input.password, kakaoLoginHtml, deadline);
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();
@@ -201,7 +201,7 @@ async function startKakaoAuthorization(
   page: Page,
   redirectUrl: string,
   deadline: number,
-): Promise<void> {
+): Promise<string> {
   const loginUrl = new URL(TISTORY_LOGIN_URL);
   loginUrl.searchParams.set("redirectUrl", redirectUrl);
   await page.goto(loginUrl.href, {
@@ -263,8 +263,8 @@ async function startKakaoAuthorization(
     waitUntil: "domcontentloaded",
     timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
   });
-  await page
-    .evaluate((state) => {
+  try {
+    await page.evaluate((state) => {
       const kakao = Reflect.get(window, "Kakao");
       const auth = kakao && typeof kakao === "object" ? Reflect.get(kakao, "Auth") : undefined;
       const authorize = auth && typeof auth === "object" ? Reflect.get(auth, "authorize") : null;
@@ -273,20 +273,26 @@ async function startKakaoAuthorization(
         redirectUri: `${window.location.origin}/auth/kakao/redirect`,
         state,
       });
-    }, authState.state)
-    .catch(() => {
-      throw new Error("Tistory Kakao SDK authorization failed");
-    });
-  await navigation;
+    }, authState.state);
+  } catch {
+    await navigation.catch(() => null);
+    throw new Error("Tistory Kakao SDK authorization failed");
+  }
+  const loginResponse = await navigation;
+  if (!loginResponse) throw new Error("Kakao login navigation did not return an HTTP response");
+  const loginHtml = await loginResponse.text().catch(() => "");
+  if (!loginHtml) throw new Error("Kakao login navigation returned an empty response");
+  return loginHtml;
 }
 
 async function authenticateKakaoAccount(
   page: Page,
   accountId: string,
   password: string,
+  loginHtml: string,
   deadline: number,
 ): Promise<void> {
-  const bootstrap = await readKakaoLoginBootstrap(page);
+  const bootstrap = await readKakaoLoginBootstrap(page, loginHtml);
   const encryptedPassword = bootstrap.encryptionPassphrase
     ? encryptKakaoPassword(password, bootstrap.encryptionPassphrase)
     : password;
@@ -322,38 +328,37 @@ async function authenticateKakaoAccount(
   await navigateToKakaoContinuation(page, continueUrl, deadline);
 }
 
-async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap> {
-  const bootstrap = await page.evaluate(async () => {
-    const response = await fetch(window.location.href, {
-      credentials: "include",
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    const html = await response.text();
-    const nextDataText =
-      /<script\b(?=[^>]*\bid=(?:"__NEXT_DATA__"|'__NEXT_DATA__'))[^>]*>([\s\S]*?)<\/script>/i.exec(
-        html,
-      )?.[1];
-    if (!nextDataText) return null;
-    const nextData = JSON.parse(nextDataText) as {
-      props?: {
-        pageProps?: {
-          pageContext?: {
-            commonContext?: { _csrf?: unknown; locale?: unknown; p?: unknown };
-            context?: { loginUrl?: unknown };
-          };
+async function readKakaoLoginBootstrap(
+  page: Page,
+  loginHtml: string,
+): Promise<KakaoLoginBootstrap> {
+  const nextDataText =
+    /<script\b(?=[^>]*\bid=(?:"__NEXT_DATA__"|'__NEXT_DATA__'))[^>]*>([\s\S]*?)<\/script>/i.exec(
+      loginHtml,
+    )?.[1];
+  if (!nextDataText) {
+    throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
+  }
+  const nextData = JSON.parse(nextDataText) as {
+    props?: {
+      pageProps?: {
+        pageContext?: {
+          commonContext?: { _csrf?: unknown; locale?: unknown; p?: unknown };
+          context?: { loginUrl?: unknown };
         };
       };
     };
-    const pageContext = nextData.props?.pageProps?.pageContext;
-    const csrf = pageContext?.commonContext?._csrf;
-    const locale = pageContext?.commonContext?.locale;
-    const encryptionPassphrase = pageContext?.commonContext?.p;
-    const loginUrl = pageContext?.context?.loginUrl;
-    if (typeof csrf !== "string" || typeof locale !== "string" || typeof loginUrl !== "string") {
-      return null;
-    }
+  };
+  const pageContext = nextData.props?.pageProps?.pageContext;
+  const csrf = pageContext?.commonContext?._csrf;
+  const locale = pageContext?.commonContext?.locale;
+  const encryptionPassphrase = pageContext?.commonContext?.p;
+  const loginUrl = pageContext?.context?.loginUrl;
+  if (typeof csrf !== "string" || typeof locale !== "string" || typeof loginUrl !== "string") {
+    throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
+  }
 
+  const userAgentHints = await page.evaluate(async () => {
     const encodeUserAgentValue = (value: string) =>
       Array.from(value)
         .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
@@ -404,20 +409,17 @@ async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap>
       };
     }
 
-    return {
-      csrf,
-      ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
-        ? { encryptionPassphrase }
-        : {}),
-      loginUrl,
-      locale,
-      userAgentHints,
-    };
+    return userAgentHints;
   });
-  if (!bootstrap) {
-    throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
-  }
-  return bootstrap;
+  return {
+    csrf,
+    ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
+      ? { encryptionPassphrase }
+      : {}),
+    loginUrl,
+    locale,
+    userAgentHints,
+  };
 }
 
 async function waitForKakaoTMSApproval(
