@@ -34,6 +34,9 @@ const KAKAO_VERIFY_TMS_ENDPOINT = "/api/v2/two_step_verification/verify_tms_for_
 const KAKAO_SUCCESS = 0;
 const KAKAO_NETWORK_ERROR = -4;
 const KAKAO_TWO_STEP_VERIFICATION_REQUIRED = -451;
+const KAKAO_CAPTCHA_REQUIRED = -481;
+const KAKAO_INVALID_CAPTCHA_RESPONSE = -482;
+const KAKAO_CAPTCHA_MAX_ATTEMPTS = 3;
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
@@ -65,6 +68,10 @@ interface KakaoHTTPResponse {
   status?: number;
   token?: string;
   continueUrl?: string;
+  dkaptcha?: {
+    src: string;
+    widgetId: string;
+  };
 }
 
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
@@ -303,7 +310,7 @@ async function authenticateKakaoAccount(
   const encryptedPassword = bootstrap.encryptionPassphrase
     ? encryptKakaoPassword(password, bootstrap.encryptionPassphrase)
     : password;
-  const response = await callKakaoJSON(page, KAKAO_AUTHENTICATE_ENDPOINT, {
+  const loginBody: Record<string, unknown> = {
     _csrf: bootstrap.csrf,
     loginId: accountId,
     loginKey: accountId,
@@ -319,7 +326,20 @@ async function authenticateKakaoAccount(
       d: bootstrap.botSignals,
     },
     ...(bootstrap.encryptionPassphrase ? { k: true } : {}),
-  });
+  };
+  let response = await callKakaoJSON(page, KAKAO_AUTHENTICATE_ENDPOINT, loginBody);
+  let captchaAttempts = 0;
+  while (
+    response.status === KAKAO_CAPTCHA_REQUIRED ||
+    response.status === KAKAO_INVALID_CAPTCHA_RESPONSE
+  ) {
+    captchaAttempts += 1;
+    if (captchaAttempts > KAKAO_CAPTCHA_MAX_ATTEMPTS || !response.dkaptcha) {
+      throw new Error("Kakao CAPTCHA verification could not be completed");
+    }
+    loginBody.captchaToken = await waitForKakaoCaptcha(page, response.dkaptcha, deadline);
+    response = await callKakaoJSON(page, KAKAO_AUTHENTICATE_ENDPOINT, loginBody);
+  }
 
   if (response.status === KAKAO_SUCCESS && response.continueUrl) {
     await navigateToKakaoContinuation(page, response.continueUrl, deadline);
@@ -333,6 +353,82 @@ async function authenticateKakaoAccount(
 
   const continueUrl = await waitForKakaoTMSApproval(page, bootstrap.csrf, response.token, deadline);
   await navigateToKakaoContinuation(page, continueUrl, deadline);
+}
+
+async function waitForKakaoCaptcha(
+  page: Page,
+  challenge: NonNullable<KakaoHTTPResponse["dkaptcha"]>,
+  deadline: number,
+): Promise<string> {
+  const scriptURL = new URL(challenge.src, "https://accounts.kakao.com");
+  const trustedHost =
+    scriptURL.hostname === "kakao.com" ||
+    scriptURL.hostname.endsWith(".kakao.com") ||
+    scriptURL.hostname === "kakaocdn.net" ||
+    scriptURL.hostname.endsWith(".kakaocdn.net");
+  if (scriptURL.protocol !== "https:" || !trustedHost || !challenge.widgetId) {
+    throw new Error("Kakao returned an untrusted CAPTCHA challenge");
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
+
+  return withTimeout(
+    page.evaluate(
+      async ({ scriptSrc, widgetId }) => {
+        document.title = "Kakao verification";
+        const root = document.createElement("main");
+        root.id = `publication-dkaptcha-${Date.now()}`;
+        root.style.cssText =
+          "min-height:100vh;display:grid;place-items:center;background:#fff;color:#111";
+        document.body.replaceChildren(root);
+
+        const globalObject = window as typeof window & {
+          dkaptcha?: {
+            render: (
+              elementId: string,
+              options: {
+                widget: string;
+                theme: "dark" | "white";
+                language: "ko" | "en";
+                option: "iframe";
+              },
+            ) => {
+              addCallbackListener: (callback: (result: { token?: unknown }) => void) => void;
+            };
+          };
+        };
+
+        if (!globalObject.dkaptcha) {
+          await new Promise<void>((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = scriptSrc;
+            script.async = true;
+            script.addEventListener("load", () => resolve(), { once: true });
+            script.addEventListener("error", () => reject(new Error("CAPTCHA load failed")), {
+              once: true,
+            });
+            document.head.appendChild(script);
+          });
+        }
+        if (!globalObject.dkaptcha) throw new Error("CAPTCHA API is unavailable");
+        return new Promise<string>((resolve) => {
+          globalObject.dkaptcha
+            ?.render(root.id, {
+              widget: widgetId,
+              theme: "white",
+              language: navigator.language.startsWith("ko") ? "ko" : "en",
+              option: "iframe",
+            })
+            .addCallbackListener((result) => {
+              if (typeof result.token === "string" && result.token) resolve(result.token);
+            });
+        });
+      },
+      { scriptSrc: scriptURL.href, widgetId: challenge.widgetId },
+    ),
+    remaining,
+    "Kakao CAPTCHA verification did not complete before the login deadline",
+  );
 }
 
 async function readKakaoLoginBootstrap(
@@ -497,11 +593,22 @@ async function callKakaoJSON(
       const status = Reflect.get(payload, "status");
       const token = Reflect.get(payload, "token");
       const continueUrl = Reflect.get(payload, "continueUrl");
+      const dkaptchaValue = Reflect.get(payload, "dkaptcha");
+      const dkaptcha =
+        dkaptchaValue && typeof dkaptchaValue === "object"
+          ? {
+              src: Reflect.get(dkaptchaValue, "src"),
+              widgetId: Reflect.get(dkaptchaValue, "widgetId"),
+            }
+          : undefined;
       return {
         httpStatus: response.status,
         ...(typeof status === "number" ? { status } : {}),
         ...(typeof token === "string" ? { token } : {}),
         ...(typeof continueUrl === "string" ? { continueUrl } : {}),
+        ...(typeof dkaptcha?.src === "string" && typeof dkaptcha.widgetId === "string"
+          ? { dkaptcha: { src: dkaptcha.src, widgetId: dkaptcha.widgetId } }
+          : {}),
       };
     },
     { endpoint, body },
