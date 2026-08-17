@@ -26,18 +26,14 @@ type LoginOutcome =
   | "authentication-failure"
   | "form-unavailable";
 
-interface BrowserHarnessOptions {
-  startsAtTistoryLogin?: boolean;
-}
-
-function createBrowserHarness(outcome: LoginOutcome, options: BrowserHarnessOptions = {}) {
+function createBrowserHarness(outcome: LoginOutcome) {
   let currentURL = "about:blank";
   let authenticated = false;
   let completionPolls = 0;
   let rootClosed = false;
   let popupClosed = false;
   let submitted = false;
-  let atKakaoLoginForm = !options.startsAtTistoryLogin;
+  let atKakaoLoginForm = false;
   const accountFill = vi.fn(async () => {});
   const passwordFill = vi.fn(async () => {});
   const kakaoLoginLinkClick = vi.fn();
@@ -89,15 +85,14 @@ function createBrowserHarness(outcome: LoginOutcome, options: BrowserHarnessOpti
 
   const page = {
     goto: vi.fn(async (url: string) => {
+      if (url.startsWith("https://www.tistory.com/auth/login")) {
+        currentURL = url;
+        atKakaoLoginForm = false;
+        return;
+      }
       if (url.includes("/manage/posts/")) {
         managementNavigations.push(url);
         currentURL = authenticated ? url : "https://www.tistory.com/auth/login";
-        return;
-      }
-      if (url.includes("/manage/newpost")) {
-        currentURL = options.startsAtTistoryLogin
-          ? "https://www.tistory.com/auth/login"
-          : "https://accounts.kakao.com/login/";
         return;
       }
       currentURL = url;
@@ -314,23 +309,16 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.accountFill).toHaveBeenCalledWith(input.accountId);
     expect(harness.passwordFill).toHaveBeenCalledOnce();
     expect(harness.passwordFill).toHaveBeenCalledWith(input.password);
+    expect(harness.kakaoLoginLinkClick).toHaveBeenCalledOnce();
     expect(harness.submitClick).toHaveBeenCalledOnce();
+    expect(harness.page.goto).toHaveBeenNthCalledWith(
+      1,
+      "https://www.tistory.com/auth/login?redirectUrl=https%3A%2F%2Fexample.tistory.com%2Fmanage%2Fnewpost",
+      { waitUntil: "domcontentloaded", timeout: 30_000 },
+    );
     expect(harness.humanWait).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
-    expectOwnedPagesCleaned(harness);
-  });
-
-  it("invokes the Tistory Kakao login DOM handler before filling credentials", async () => {
-    const harness = createBrowserHarness("automatic-success", { startsAtTistoryLogin: true });
-
-    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
-      authenticated: true,
-    });
-
-    expect(harness.kakaoLoginLinkClick).toHaveBeenCalledOnce();
-    expect(harness.accountFill).toHaveBeenCalledOnce();
-    expect(harness.submitClick).toHaveBeenCalledOnce();
     expectOwnedPagesCleaned(harness);
   });
 

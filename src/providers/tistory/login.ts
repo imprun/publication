@@ -28,6 +28,7 @@ const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 const LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
 const KAKAO_ACCOUNT_INPUT_SELECTOR = 'input[name="loginKey"], input[name="loginId"]';
+const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
@@ -113,7 +114,9 @@ async function performLogin(
   page: Page,
 ): Promise<TistoryLoginResult> {
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
-  await page.goto(`${origin}/manage/newpost`, {
+  const loginURL = new URL(TISTORY_LOGIN_URL);
+  loginURL.searchParams.set("redirectUrl", `${origin}/manage/newpost`);
+  await page.goto(loginURL.href, {
     waitUntil: "domcontentloaded",
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
