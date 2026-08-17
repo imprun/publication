@@ -370,7 +370,7 @@ async function main() {
     options.context,
     LOGIN_ACTION,
     runInput,
-    21 * 60 * 1000,
+    16 * 60 * 1000,
   );
   const status = await runAction<ConnectionResult>(
     options.context,
