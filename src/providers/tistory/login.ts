@@ -241,7 +241,9 @@ async function fillCredentials(page: Page, accountId: string, password: string) 
     })
     .catch(() => null);
   if (!accountInput) {
-    throw new Error("Kakao account input was not available for automatic login");
+    throw new Error(
+      `Kakao account input was not available for automatic login at ${safePageLocation(page.url())}`,
+    );
   }
   const accountInputName = await accountInput.evaluate((element) => element.getAttribute("name"));
   if (accountInputName !== "loginKey" && accountInputName !== "loginId") {
@@ -254,7 +256,9 @@ async function fillCredentials(page: Page, accountId: string, password: string) 
     })
     .catch(() => null);
   if (!passwordInput) {
-    throw new Error("Kakao password input was not available for automatic login");
+    throw new Error(
+      `Kakao password input was not available for automatic login at ${safePageLocation(page.url())}`,
+    );
   }
   await page.locator(`input[name="${accountInputName}"]`).fill(accountId);
   await page.locator('input[name="password"]').fill(password);
@@ -276,7 +280,9 @@ async function submitCredentials(page: Page) {
     })
     .catch(() => null);
   if (!submit) {
-    throw new Error("Kakao login submit control was not available for automatic login");
+    throw new Error(
+      `Kakao login submit control was not available for automatic login at ${safePageLocation(page.url())}`,
+    );
   }
   const navigation = page
     .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
@@ -338,6 +344,13 @@ function parsePageURL(value: string): URL | undefined {
   } catch {
     return undefined;
   }
+}
+
+function safePageLocation(value: string): string {
+  const url = parsePageURL(value);
+  if (!url) return "an unknown page";
+  if (!url.host) return `${url.protocol}${url.pathname}`;
+  return `${url.protocol}//${url.host}${url.pathname}`;
 }
 
 function isAuthenticatedManagementURL(url: URL, host: string): boolean {
