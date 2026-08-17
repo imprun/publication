@@ -186,13 +186,7 @@ async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
   if (await isVisible(page, KAKAO_ACCOUNT_INPUT_SELECTOR)) return;
   const kakaoButton = await page.$("a.btn_login.link_kakao_id");
   if (!kakaoButton || !(await kakaoButton.isVisible().catch(() => false))) return;
-
-  const navigation = page.waitForNavigation({
-    waitUntil: "domcontentloaded",
-    timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
-  });
   await kakaoButton.evaluate((element) => (element as HTMLElement).click());
-  await navigation;
 }
 
 async function fillCredentials(page: Page, accountId: string, password: string) {
