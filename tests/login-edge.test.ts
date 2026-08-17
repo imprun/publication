@@ -35,6 +35,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
   let submitted = false;
   const tistoryAuthState = vi.fn();
   const kakaoAuthorize = vi.fn();
+  const kakaoPageJavaScriptFill = vi.fn();
   const kakaoPageJavaScriptSubmit = vi.fn();
   const originalPage = {
     close: vi.fn(async () => {}),
@@ -86,7 +87,15 @@ function createBrowserHarness(outcome: LoginOutcome) {
         currentURL = "https://accounts.kakao.com/login/";
         return undefined;
       }
-      if (source.includes("form.requestSubmit") && argument && typeof argument === "object") {
+      if (
+        source.includes("HTMLInputElement.prototype") &&
+        argument &&
+        typeof argument === "object"
+      ) {
+        kakaoPageJavaScriptFill();
+        return true;
+      }
+      if (source.includes("form.requestSubmit")) {
         kakaoPageJavaScriptSubmit();
         submitted = true;
         if (outcome === "automatic-success") {
@@ -188,6 +197,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
     originalPage,
     tistoryAuthState,
     kakaoAuthorize,
+    kakaoPageJavaScriptFill,
     kakaoPageJavaScriptSubmit,
     humanWait,
     setVariable,
@@ -276,6 +286,7 @@ describe("Tistory Browser Edge login", () => {
 
     expect(harness.tistoryAuthState).toHaveBeenCalledOnce();
     expect(harness.kakaoAuthorize).toHaveBeenCalledOnce();
+    expect(harness.kakaoPageJavaScriptFill).toHaveBeenCalledOnce();
     expect(harness.kakaoPageJavaScriptSubmit).toHaveBeenCalledOnce();
     expect(harness.humanWait).not.toHaveBeenCalled();
     expect(harness.setVariable).toHaveBeenCalledOnce();
