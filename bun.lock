@@ -5,7 +5,7 @@
     "": {
       "name": "@imprun/publication",
       "dependencies": {
-        "@imprun/app-sdk": "https://codeload.github.com/imprun/app-sdk/tar.gz/e0604c59d5261f720f3544dbbcd19b5f785070a7",
+        "@imprun/app-sdk": "https://codeload.github.com/imprun/app-sdk/tar.gz/4657fb5408bacc617e93ca698c9d3a111de36e2a",
         "marked": "16.0.0",
         "playwright": "1.60.0",
         "sanitize-html": "2.17.7",
@@ -39,7 +39,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.3.15", "", { "os": "win32", "cpu": "x64" }, "sha512-kDZr/hgg+igo5Emi0LcjlgfkoGZtgIpJKhnvKTRmMBv6FF/3SDyEV4khBwqNebZIyMZTzvpca9sQNSXJ39pI2A=="],
 
-    "@imprun/app-sdk": ["@imprun/app-sdk@https://codeload.github.com/imprun/app-sdk/tar.gz/e0604c59d5261f720f3544dbbcd19b5f785070a7", {}, "sha512-ZKeeRBqiMHqgAMpabczPTD7dDvM8mqNd5DSz82yJEX065UCQor092eUJs5DIwhkK7ajhMUiLz6sQVwtrc322hA=="],
+    "@imprun/app-sdk": ["@imprun/app-sdk@https://codeload.github.com/imprun/app-sdk/tar.gz/4657fb5408bacc617e93ca698c9d3a111de36e2a", {}, "sha512-yJli49vBT/CCLoYSe/AXT4071xkPdo8bg4XxyR3RVpIpN/clJ90/96QQ4YWhNGFP4J3dhg4PnvaBt36hNs7BGA=="],
 
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
