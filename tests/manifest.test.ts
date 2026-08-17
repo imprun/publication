@@ -84,8 +84,8 @@ describe("Windforce manifest", () => {
     expect(loginSource).toContain('client.call("authenticate"');
     expect(loginSource).toContain('client.call("check_tms_for_two_step_verification"');
     expect(loginSource).toContain("webpackChunk_N_E");
-    expect(loginSource).toContain("String(userAgentData?.mobile ?? false)");
-    expect(loginSource).toContain("mo: navigator.maxTouchPoints");
+    expect(loginSource).toContain("character.charCodeAt(0).toString(16)");
+    expect(loginSource).toContain("mo: userAgentData?.mobile ? 1 : 0");
     expect(loginSource).toContain("kakaoAuthState");
     for (const forbidden of [
       "waitForSelector",

@@ -422,14 +422,27 @@ async function callKakaoAuthenticate(
               ])
               .catch(() => ({}))
           : {};
+        const encodeHint = (value: unknown) =>
+          Array.from(typeof value === "string" ? value : "")
+            .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
+            .join("");
+        const fullVersionList = Array.isArray(highEntropy.fullVersionList)
+          ? highEntropy.fullVersionList.flatMap((item) => {
+              if (!item || typeof item !== "object") return [];
+              const brand = Reflect.get(item, "brand");
+              const version = Reflect.get(item, "version");
+              if (typeof brand !== "string" || typeof version !== "string") return [];
+              return [{ br: encodeHint(brand), vr: encodeHint(version) }];
+            })
+          : [];
         const browserHints = {
-          a: highEntropy.architecture,
-          b: highEntropy.bitness,
-          m: String(userAgentData?.mobile ?? false),
-          pv: highEntropy.platformVersion,
-          fvl: highEntropy.fullVersionList,
-          mo: navigator.maxTouchPoints,
-          p: userAgentData?.platform,
+          a: encodeHint(highEntropy.architecture),
+          b: encodeHint(highEntropy.bitness),
+          m: encodeHint(highEntropy.model),
+          pv: encodeHint(highEntropy.platformVersion),
+          fvl: fullVersionList,
+          mo: userAgentData?.mobile ? 1 : 0,
+          p: encodeHint(userAgentData?.platform),
         };
 
         let response: unknown;
