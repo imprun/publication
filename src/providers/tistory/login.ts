@@ -8,13 +8,8 @@ import {
   TISTORY_SESSION_REFERENCE,
 } from "../../config.js";
 import type { ConnectionLoginInput } from "../../contracts.js";
-import { waitForHumanDecision } from "../../human.js";
 import type { TistoryConnection, TistorySession } from "../../session.js";
 import { normalizeTistoryHost, tistoryOrigin } from "./host.js";
-
-interface LoginApproval {
-  completed: boolean;
-}
 
 export interface TistoryLoginResult {
   provider: "tistory";
@@ -25,8 +20,8 @@ export interface TistoryLoginResult {
   authenticated: true;
 }
 
-const AUTHENTICATION_WAIT_TIMEOUT_MS = 90_000;
-const AUTHENTICATION_POLL_INTERVAL_MS = 750;
+const AUTHENTICATION_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+const AUTHENTICATION_POLL_INTERVAL_MS = 1_000;
 const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
 const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
@@ -119,34 +114,7 @@ async function performLogin(
   await fillCredentials(page, input.accountId, input.password);
   await submitCredentials(page);
 
-  if (!(await isAuthenticatedManagementSession(page, origin, host))) {
-    const decision = await waitForHumanDecision<LoginApproval>(ctx, {
-      key: "tistory-kakao-additional-verification",
-      kind: "form",
-      title: "카카오 추가 인증을 확인해 주세요",
-      description:
-        "계정 입력과 로그인 제출은 자동으로 완료했습니다. 카카오톡 또는 휴대전화에 표시된 추가 인증만 완료한 뒤 승인해 주세요. 아이디와 비밀번호를 다시 입력할 필요는 없습니다.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["completed"],
-        properties: {
-          completed: {
-            type: "boolean",
-            const: true,
-            title: "추가 인증을 완료했습니다",
-          },
-        },
-      },
-      privateContext: { provider: "tistory", connectionId: "default", blogHost: host },
-      timeoutMs: 10 * 60 * 1000,
-    });
-    if (decision.outcome === "cancel" || decision.value?.completed !== true) {
-      throw new Error("Tistory login was canceled");
-    }
-
-    await waitForAuthenticatedSession(page, origin, host);
-  }
+  await waitForAuthenticatedSession(page, origin, host);
   const capturedAt = new Date().toISOString();
   const storageState = await captureStorageState(page, origin);
   if (
@@ -285,8 +253,9 @@ async function waitForAuthenticatedSession(
   const apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`;
 
   while (Date.now() < deadline) {
-    let currentURL = parsePageURL(page.url());
-    if (!currentURL || !isAuthenticatedManagementURL(currentURL, host)) {
+    const currentURL = parsePageURL(page.url());
+    if (currentURL && (await isAuthenticatedManagementSession(page, origin, host, apiURL))) return;
+    if (currentURL && isPostAuthenticationTistoryURL(currentURL, host)) {
       const remaining = deadline - Date.now();
       await page
         .goto(managementURL, {
@@ -294,12 +263,13 @@ async function waitForAuthenticatedSession(
           timeout: Math.max(1, Math.min(10_000, remaining)),
         })
         .catch(() => null);
-      currentURL = parsePageURL(page.url());
+      if (await isAuthenticatedManagementSession(page, origin, host, apiURL)) return;
     }
-    if (currentURL && (await isAuthenticatedManagementSession(page, origin, host, apiURL))) return;
     await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
   }
-  throw new Error("Tistory management session was not established before the login deadline");
+  throw new Error(
+    `Tistory management session was not established before the login deadline at ${safePageLocation(page.url())}`,
+  );
 }
 
 async function isAuthenticatedManagementSession(
@@ -340,6 +310,13 @@ function safePageLocation(value: string): string {
 function isAuthenticatedManagementURL(url: URL, host: string): boolean {
   return (
     url.hostname === host && url.pathname.startsWith("/manage/") && !url.pathname.includes("/auth/")
+  );
+}
+
+function isPostAuthenticationTistoryURL(url: URL, host: string): boolean {
+  return (
+    (url.hostname === host || url.hostname === "www.tistory.com") &&
+    !url.pathname.startsWith("/auth/")
   );
 }
 
