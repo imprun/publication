@@ -63,10 +63,12 @@ Secret Variable paths it can read. Only `connection.login` can write them.
 
 The supplied login HAR defines the current Kakao adapter state machine:
 `authenticate.json`, `verify_tms_for_login.json`, OAuth continuation, then the
-Tistory callback. Browser isolation is still required to obtain current CSRF,
-encryption, OAuth, cookie, and user-agent state, but credentials are not typed
-into DOM fields and no separate HumanTask completion signal is used. Session
-state is persisted only after the read-only Tistory management API succeeds.
+Tistory callback. Browser isolation supplies the origin security model, current
+CSRF/encryption/user-agent context, and the cookie/storage jar. The adapter uses
+page-scoped `fetch` plus top-level origin navigation; it does not query, fill,
+click, or submit elements from the rendered page. No separate HumanTask
+completion signal is used. Session state is persisted only after the read-only
+Tistory management API succeeds.
 
 The first release deliberately supports one exact connection path (`default`).
 Dynamic account paths are deferred because the Core authorization contract is

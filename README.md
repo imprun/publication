@@ -7,11 +7,12 @@ the backend contract is complete.
 ## Backend flow
 
 1. `connection.login` connects Puppeteer to the Job-scoped `edge-cdp` capability
-   and creates an isolated BrowserContext. It uses the Tistory login handler only
-   to bootstrap fresh Kakao CSRF/OAuth state, then sends the HAR-backed Kakao JSON
-   login request directly. If Kakao requires phone approval, the App checks its
-   status every second and continues automatically. The persisted Run input
-   contains only the public Tistory blog host.
+   and creates an isolated BrowserContext. Browser Edge is used only as an
+   origin-aware HTTP runtime and cookie/storage jar: the action uses `fetch` for
+   the HAR-backed Tistory/Kakao state machine and never queries, fills, or clicks
+   page elements. If Kakao requires phone approval, the App checks its status
+   every second and continues automatically. The persisted Run input contains
+   only the public Tistory blog host.
 2. The action writes the Chrome session to the App-owned Secret Variable
    `connections/tistory/default/session`.
 3. It writes safe connection metadata to the App-owned Resource

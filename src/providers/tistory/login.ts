@@ -26,8 +26,8 @@ const BROWSER_PROTOCOL_TIMEOUT_MS = 30_000;
 const BROWSER_CONTEXT_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_PAGE_CREATION_TIMEOUT_MS = 20_000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
-const LOGIN_FORM_READY_TIMEOUT_MS = 20_000;
-const KAKAO_ACCOUNT_INPUT_SELECTOR = 'input[name="loginKey"], input[name="loginId"]';
+const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
+const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
 const KAKAO_AUTHENTICATE_ENDPOINT = "/api/v2/login/authenticate.json";
 const KAKAO_VERIFY_TMS_ENDPOINT = "/api/v2/two_step_verification/verify_tms_for_login.json";
 const KAKAO_SUCCESS = 0;
@@ -37,7 +37,6 @@ const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
 interface KakaoLoginBootstrap {
-  accountInputName: "loginId" | "loginKey";
   botSignals: number[];
   csrf: string;
   encryptionPassphrase?: string;
@@ -136,12 +135,8 @@ async function performLogin(
   origin: string,
   page: Page,
 ): Promise<TistoryLoginResult> {
-  await page.goto(`${origin}/manage/newpost`, {
-    waitUntil: "domcontentloaded",
-    timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
-  });
-  await openKakaoLoginIfNeeded(page);
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+  await startKakaoAuthorization(page, `${origin}/manage/newpost`, deadline);
   await authenticateKakaoAccount(page, input.accountId, input.password, deadline);
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
@@ -196,23 +191,92 @@ async function loadPuppeteer(): Promise<typeof import("puppeteer-core")> {
   return import(["puppeteer", "-core"].join(""));
 }
 
-async function openKakaoLoginIfNeeded(page: Page): Promise<void> {
-  await page
-    .waitForSelector(`${KAKAO_ACCOUNT_INPUT_SELECTOR}, a.btn_login.link_kakao_id`, {
-      visible: true,
-      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
-    })
-    .catch(() => null);
-  if (await isVisible(page, KAKAO_ACCOUNT_INPUT_SELECTOR)) return;
-  const kakaoButton = await page.$("a.btn_login.link_kakao_id");
-  if (!kakaoButton || !(await kakaoButton.isVisible().catch(() => false))) return;
-
-  const navigation = page.waitForNavigation({
+async function startKakaoAuthorization(
+  page: Page,
+  redirectUrl: string,
+  deadline: number,
+): Promise<void> {
+  const loginUrl = new URL(TISTORY_LOGIN_URL);
+  loginUrl.searchParams.set("redirectUrl", redirectUrl);
+  await page.goto(loginUrl.href, {
     waitUntil: "domcontentloaded",
     timeout: BROWSER_NAVIGATION_TIMEOUT_MS,
   });
-  await kakaoButton.evaluate((element) => (element as HTMLElement).click());
-  await navigation;
+
+  const started = await page
+    .evaluate(
+      async ({ stateEndpoint, redirectUrl }) => {
+        const [stateResponse, loginResponse] = await Promise.all([
+          fetch(stateEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ redirectUrl, isPopup: false }),
+            credentials: "include",
+          }),
+          fetch(window.location.href, { credentials: "include", cache: "no-store" }),
+        ]);
+        const payload = await stateResponse.json().catch(() => null);
+        const state =
+          payload && typeof payload === "object" ? Reflect.get(payload, "data") : undefined;
+        const loginHtml = await loginResponse.text();
+        const clientId = /Kakao\.init\(\s*["']([^"']+)["']\s*\)/.exec(loginHtml)?.[1];
+        if (!stateResponse.ok || !loginResponse.ok || typeof state !== "string" || !clientId) {
+          return { httpStatus: stateResponse.status, started: false };
+        }
+
+        const kakao = Reflect.get(window, "Kakao");
+        const sdkVersion =
+          kakao && typeof kakao === "object" && typeof Reflect.get(kakao, "VERSION") === "string"
+            ? (Reflect.get(kakao, "VERSION") as string)
+            : "1.44.0";
+        const language = navigator.language || "ko-KR";
+        const platform = navigator.platform.replace(/ /g, "_");
+        const ka = [
+          `sdk/${sdkVersion}`,
+          "os/javascript",
+          "sdk_type/javascript",
+          `lang/${language}`,
+          `device/${platform}`,
+          `origin/${encodeURIComponent(window.location.origin)}`,
+        ].join(" ");
+        const authTranId = (
+          Math.random().toString(36).slice(2) +
+          clientId +
+          Date.now().toString(36)
+        ).slice(0, 60);
+        const authorizeUrl = new URL("https://kauth.kakao.com/oauth/authorize");
+        authorizeUrl.searchParams.set("client_id", clientId);
+        authorizeUrl.searchParams.set("state", state);
+        authorizeUrl.searchParams.set("prompt", "select_account");
+        authorizeUrl.searchParams.set(
+          "redirect_uri",
+          `${window.location.origin}/auth/kakao/redirect`,
+        );
+        authorizeUrl.searchParams.set("response_type", "code");
+        authorizeUrl.searchParams.set("auth_tran_id", authTranId);
+        authorizeUrl.searchParams.set("ka", ka);
+        return { authorizeUrl: authorizeUrl.href, httpStatus: stateResponse.status, started: true };
+      },
+      { stateEndpoint: TISTORY_KAKAO_AUTH_STATE_ENDPOINT, redirectUrl },
+    )
+    .catch(() => null);
+  if (!started?.started || !started.authorizeUrl) {
+    throw new Error(`Tistory Kakao authorization failed at ${safePageLocation(page.url())}`);
+  }
+  const authorizeUrl = new URL(started.authorizeUrl);
+  if (
+    authorizeUrl.protocol !== "https:" ||
+    authorizeUrl.hostname !== "kauth.kakao.com" ||
+    authorizeUrl.pathname !== "/oauth/authorize"
+  ) {
+    throw new Error("Tistory returned an untrusted Kakao authorization URL");
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
+  await page.goto(authorizeUrl.href, {
+    waitUntil: "domcontentloaded",
+    timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
+  });
 }
 
 async function authenticateKakaoAccount(
@@ -258,25 +322,17 @@ async function authenticateKakaoAccount(
 }
 
 async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap> {
-  const accountInput = await page
-    .waitForSelector(KAKAO_ACCOUNT_INPUT_SELECTOR, {
-      visible: true,
-      timeout: LOGIN_FORM_READY_TIMEOUT_MS,
-    })
-    .catch(() => null);
-  if (!accountInput) {
-    throw new Error(
-      `Kakao account input was not available for automatic login at ${safePageLocation(page.url())}`,
-    );
-  }
   const bootstrap = await page.evaluate(async () => {
-    const accountInput = document.querySelector<HTMLInputElement>(
-      'input[name="loginKey"], input[name="loginId"]',
-    );
-    const accountInputName = accountInput?.name;
-    if (accountInputName !== "loginId" && accountInputName !== "loginKey") return null;
-    const normalizedAccountInputName: "loginId" | "loginKey" = accountInputName;
-    const nextDataText = document.querySelector("#__NEXT_DATA__")?.textContent;
+    const response = await fetch(window.location.href, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const nextDataText =
+      /<script\b(?=[^>]*\bid=(?:"__NEXT_DATA__"|'__NEXT_DATA__'))[^>]*>([\s\S]*?)<\/script>/i.exec(
+        html,
+      )?.[1];
     if (!nextDataText) return null;
     const nextData = JSON.parse(nextDataText) as {
       props?: {
@@ -349,9 +405,7 @@ async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap>
 
     const botSignals: number[] = [];
     const webdriverDetected =
-      navigator.webdriver ||
-      Object.keys(window).some((key) => key.startsWith("cdc_")) ||
-      Object.keys(document).some((key) => key.startsWith("cdc_"));
+      navigator.webdriver || Object.keys(window).some((key) => key.startsWith("cdc_"));
     if (webdriverDetected) botSignals.push(11);
     if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
       const hasTouch = "ontouchstart" in window || typeof TouchEvent !== "undefined";
@@ -363,7 +417,6 @@ async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap>
     botSignals.push(44);
 
     return {
-      accountInputName: normalizedAccountInputName,
       botSignals,
       csrf,
       ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
@@ -460,77 +513,76 @@ async function navigateToKakaoContinuation(
   } catch {
     throw new Error(`Kakao login continuation failed at ${safePageLocation(continueUrl.href)}`);
   }
-  await submitKakaoOAuthApprovalIfRequired(page, deadline);
+  await submitKakaoOAuthApprovalByHTTP(page, deadline);
 }
 
-async function submitKakaoOAuthApprovalIfRequired(page: Page, deadline: number): Promise<void> {
-  const formDeadline = Math.min(deadline, Date.now() + LOGIN_FORM_READY_TIMEOUT_MS);
-  while (Date.now() < formDeadline) {
-    const currentURL = parsePageURL(page.url());
-    if (
-      !currentURL ||
-      currentURL.hostname !== "kauth.kakao.com" ||
-      currentURL.pathname !== "/oauth/authorize"
-    ) {
-      return;
-    }
-
-    const hasApprovalForm = await page.evaluate(() =>
-      Array.from(document.forms).some((form) => {
-        const action = new URL(
-          form.getAttribute("action") || window.location.href,
-          window.location.href,
-        );
-        return (
-          form.method.toLowerCase() === "post" &&
-          action.hostname === "kauth.kakao.com" &&
-          action.pathname === "/oauth/authorize" &&
-          ["stsc", "csts", "auth_tran_id", "user_oauth_approval"].every((name) =>
-            Boolean(form.elements.namedItem(name)),
-          )
-        );
-      }),
-    );
-    if (!hasApprovalForm) {
-      await sleep(
-        Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, formDeadline - Date.now())),
-      );
-      continue;
-    }
-
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
-    try {
-      await Promise.all([
-        page.waitForNavigation({
-          waitUntil: "domcontentloaded",
-          timeout: Math.max(1, Math.min(BROWSER_NAVIGATION_TIMEOUT_MS, remaining)),
-        }),
-        page.evaluate(() => {
-          const form = Array.from(document.forms).find((candidate) => {
-            const action = new URL(
-              candidate.getAttribute("action") || window.location.href,
-              window.location.href,
-            );
-            return (
-              candidate.method.toLowerCase() === "post" &&
-              action.hostname === "kauth.kakao.com" &&
-              action.pathname === "/oauth/authorize" &&
-              ["stsc", "csts", "auth_tran_id", "user_oauth_approval"].every((name) =>
-                Boolean(candidate.elements.namedItem(name)),
-              )
-            );
-          });
-          if (!form) throw new Error("Kakao OAuth approval form disappeared");
-          HTMLFormElement.prototype.submit.call(form);
-        }),
-      ]);
-      return;
-    } catch {
-      throw new Error(`Kakao OAuth approval failed at ${safePageLocation(page.url())}`);
-    }
+async function submitKakaoOAuthApprovalByHTTP(page: Page, deadline: number): Promise<void> {
+  const currentURL = parsePageURL(page.url());
+  if (
+    !currentURL ||
+    currentURL.hostname !== "kauth.kakao.com" ||
+    currentURL.pathname !== "/oauth/authorize"
+  ) {
+    return;
   }
-  throw new Error(`Kakao OAuth approval form was not available at ${safePageLocation(page.url())}`);
+  if (Date.now() >= deadline) {
+    throw new Error("Kakao login did not complete before the login deadline");
+  }
+
+  const result = await page.evaluate(async () => {
+    const requiredFields = ["stsc", "csts", "auth_tran_id", "user_oauth_approval"];
+    const response = await fetch(window.location.href, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!response.ok) return { httpStatus: response.status, submitted: false };
+    const html = await response.text();
+    const parsed = new DOMParser().parseFromString(html, "text/html");
+    const form = Array.from(parsed.forms).find((candidate) => {
+      const action = new URL(
+        candidate.getAttribute("action") || window.location.href,
+        window.location.href,
+      );
+      return (
+        candidate.method.toLowerCase() === "post" &&
+        action.hostname === "kauth.kakao.com" &&
+        action.pathname === "/oauth/authorize" &&
+        requiredFields.every((name) => Boolean(candidate.elements.namedItem(name)))
+      );
+    });
+    if (!form) return { httpStatus: response.status, submitted: false };
+
+    const action = new URL(
+      form.getAttribute("action") || window.location.href,
+      window.location.href,
+    );
+    const body = new URLSearchParams();
+    for (const name of requiredFields) {
+      const field = form.elements.namedItem(name);
+      if (!(field instanceof HTMLInputElement)) {
+        return { httpStatus: response.status, submitted: false };
+      }
+      body.set(name, field.value);
+    }
+    try {
+      const approval = await fetch(action.href, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        credentials: "include",
+        redirect: "follow",
+      });
+      return { httpStatus: approval.status, submitted: true };
+    } catch (error) {
+      if (error instanceof TypeError) return { submitted: true };
+      throw error;
+    }
+  });
+  if (!result.submitted) {
+    throw new Error(
+      `Kakao OAuth HTTP approval was not accepted (HTTP ${result.httpStatus ?? "unknown"})`,
+    );
+  }
 }
 
 function kakaoResponseError(message: string, response: KakaoHTTPResponse): string {
@@ -562,18 +614,14 @@ async function waitForAuthenticatedSession(
   const apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`;
 
   while (Date.now() < deadline) {
-    const currentURL = parsePageURL(page.url());
-    if (currentURL && (await isAuthenticatedManagementSession(page, origin, host, apiURL))) return;
-    if (currentURL && isPostAuthenticationTistoryURL(currentURL, host)) {
-      const remaining = deadline - Date.now();
-      await page
-        .goto(managementURL, {
-          waitUntil: "domcontentloaded",
-          timeout: Math.max(1, Math.min(10_000, remaining)),
-        })
-        .catch(() => null);
-      if (await isAuthenticatedManagementSession(page, origin, host, apiURL)) return;
-    }
+    const remaining = deadline - Date.now();
+    await page
+      .goto(managementURL, {
+        waitUntil: "domcontentloaded",
+        timeout: Math.max(1, Math.min(10_000, remaining)),
+      })
+      .catch(() => null);
+    if (await isAuthenticatedManagementSession(page, origin, host, apiURL)) return;
     await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
   }
   throw new Error(
@@ -588,7 +636,14 @@ async function isAuthenticatedManagementSession(
   apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`,
 ): Promise<boolean> {
   const currentURL = parsePageURL(page.url());
-  if (!currentURL || !isAuthenticatedManagementURL(currentURL, host)) return false;
+  if (
+    !currentURL ||
+    currentURL.origin !== origin ||
+    currentURL.hostname !== host ||
+    !currentURL.pathname.startsWith("/manage/")
+  ) {
+    return false;
+  }
   return page
     .evaluate(async (endpoint) => {
       const response = await fetch(endpoint, {
@@ -614,24 +669,6 @@ function safePageLocation(value: string): string {
   if (!url) return "an unknown page";
   if (!url.host) return `${url.protocol}${url.pathname}`;
   return `${url.protocol}//${url.host}${url.pathname}`;
-}
-
-function isAuthenticatedManagementURL(url: URL, host: string): boolean {
-  return (
-    url.hostname === host && url.pathname.startsWith("/manage/") && !url.pathname.includes("/auth/")
-  );
-}
-
-function isPostAuthenticationTistoryURL(url: URL, host: string): boolean {
-  return (
-    (url.hostname === host || url.hostname === "www.tistory.com") &&
-    !url.pathname.startsWith("/auth/")
-  );
-}
-
-async function isVisible(page: Page, selector: string): Promise<boolean> {
-  const element = await page.$(selector);
-  return element ? element.isVisible().catch(() => false) : false;
 }
 
 async function captureStorageState(
