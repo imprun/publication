@@ -1,6 +1,6 @@
 import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
-import type { Browser, BrowserContext, Page, Target } from "puppeteer-core";
+import type { BrowserContext, Page } from "puppeteer-core";
 import {
   TISTORY_CONNECTION_RESOURCE_TYPE,
   TISTORY_PROFILE_PATH,
@@ -37,7 +37,6 @@ const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
 interface KakaoLoginBootstrap {
-  botSignals: number[];
   csrf: string;
   encryptionPassphrase?: string;
   loginUrl: string;
@@ -78,7 +77,6 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
     protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
   });
   let isolatedContext: BrowserContext | undefined;
-  let rootTarget: Target | undefined;
   let result: TistoryLoginResult | undefined;
   let actionError: unknown;
   try {
@@ -92,15 +90,21 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
       BROWSER_PAGE_CREATION_TIMEOUT_MS,
       "Tistory isolated browser page creation timed out",
     );
-    rootTarget = page.target();
-    result = await performLogin({ ...input, accountId, password }, ctx, host, origin, page);
+    result = await performLogin(
+      { ...input, accountId, password },
+      ctx,
+      host,
+      origin,
+      isolatedContext,
+      page,
+    );
   } catch (error) {
     actionError = error;
   }
 
   const cleanupErrors: unknown[] = [];
   try {
-    if (rootTarget) await closeOwnedTargetTree(browser, rootTarget);
+    if (isolatedContext) await closeOwnedContextPages(isolatedContext);
   } catch (error) {
     cleanupErrors.push(error);
   }
@@ -133,6 +137,7 @@ async function performLogin(
   ctx: WindforceContext,
   host: string,
   origin: string,
+  browserContext: BrowserContext,
   page: Page,
 ): Promise<TistoryLoginResult> {
   const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
@@ -141,7 +146,7 @@ async function performLogin(
 
   await waitForAuthenticatedSession(page, origin, host, deadline);
   const capturedAt = new Date().toISOString();
-  const storageState = await captureStorageState(page, origin);
+  const storageState = await captureStorageState(browserContext, page, origin);
   if (
     !storageState.cookies.some(
       (cookie) => cookie.domain === "tistory.com" || cookie.domain.endsWith(".tistory.com"),
@@ -301,8 +306,8 @@ async function authenticateKakaoAccount(
     security_context: {
       a: [],
       b: bootstrap.userAgentHints,
-      c: bootstrap.botSignals.length > 0,
-      d: bootstrap.botSignals,
+      c: false,
+      d: [],
     },
     ...(bootstrap.encryptionPassphrase ? { k: true } : {}),
   });
@@ -403,21 +408,7 @@ async function readKakaoLoginBootstrap(page: Page): Promise<KakaoLoginBootstrap>
       };
     }
 
-    const botSignals: number[] = [];
-    const webdriverDetected =
-      navigator.webdriver || Object.keys(window).some((key) => key.startsWith("cdc_"));
-    if (webdriverDetected) botSignals.push(11);
-    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-      const hasTouch = "ontouchstart" in window || typeof TouchEvent !== "undefined";
-      if (!hasTouch || navigator.maxTouchPoints === 0) botSignals.push(23);
-    }
-    // The HTTP path intentionally records no pointer positions. Kakao's client
-    // reports that condition as signal 44 when every recorded event is a
-    // synthetic submit-button position; the empty set has the same result.
-    botSignals.push(44);
-
     return {
-      botSignals,
       csrf,
       ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
         ? { encryptionPassphrase }
@@ -672,22 +663,28 @@ function safePageLocation(value: string): string {
 }
 
 async function captureStorageState(
+  browserContext: BrowserContext,
   page: Page,
   origin: string,
 ): Promise<TistorySession["storageState"]> {
-  const cookies = (await page.cookies(`${origin}/`, "https://www.tistory.com/")).map((cookie) => ({
-    name: cookie.name,
-    value: cookie.value,
-    domain: cookie.domain,
-    path: cookie.path,
-    expires: cookie.expires,
-    httpOnly: cookie.httpOnly ?? false,
-    secure: cookie.secure,
-    sameSite:
-      cookie.sameSite === "Strict" || cookie.sameSite === "None"
-        ? cookie.sameSite
-        : ("Lax" as const),
-  }));
+  const cookies = (await browserContext.cookies())
+    .filter((cookie) => {
+      const domain = cookie.domain.replace(/^\./, "");
+      return domain === "tistory.com" || domain.endsWith(".tistory.com");
+    })
+    .map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      expires: cookie.expires,
+      httpOnly: cookie.httpOnly ?? false,
+      secure: cookie.secure,
+      sameSite:
+        cookie.sameSite === "Strict" || cookie.sameSite === "None"
+          ? cookie.sameSite
+          : ("Lax" as const),
+    }));
   const pageURL = new URL(page.url());
   if (pageURL.origin !== origin) throw new Error("Tistory page left the authenticated origin");
   const localStorage = await page.evaluate(() =>
@@ -705,37 +702,17 @@ async function captureSessionStorage(page: Page) {
   return [{ origin: pageURL.origin, items }];
 }
 
-async function closeOwnedTargetTree(browser: Browser, rootTarget: Target): Promise<void> {
+async function closeOwnedContextPages(browserContext: BrowserContext): Promise<void> {
   const deadline = Date.now() + TARGET_CLEANUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const ownedTargets = browser.targets().map((target) => ({
-      target,
-      depth: ownedTargetDepth(target, rootTarget),
-    }));
-    const remaining = ownedTargets
-      .filter(({ depth }) => depth >= 0)
-      .sort((left, right) => right.depth - left.depth);
+    const remaining = (await browserContext.pages()).filter((page) => !page.isClosed());
     if (remaining.length === 0) return;
-    for (const { target } of remaining) {
-      const ownedPage = await target.page().catch(() => null);
-      if (ownedPage && !ownedPage.isClosed()) {
-        await ownedPage.close({ runBeforeUnload: false }).catch(() => undefined);
-      }
+    for (const ownedPage of remaining) {
+      await ownedPage.close({ runBeforeUnload: false }).catch(() => undefined);
     }
     await sleep(TARGET_CLEANUP_POLL_INTERVAL_MS);
   }
-  throw new Error("Tistory browser target cleanup timed out");
-}
-
-function ownedTargetDepth(target: Target, rootTarget: Target): number {
-  let current: Target | undefined = target;
-  let depth = 0;
-  while (current) {
-    if (current === rootTarget) return depth;
-    current = current.opener();
-    depth += 1;
-  }
-  return -1;
+  throw new Error("Tistory browser page cleanup timed out");
 }
 
 function sleep(milliseconds: number): Promise<void> {
