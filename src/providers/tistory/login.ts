@@ -282,14 +282,13 @@ async function submitKakaoLoginWithPageJavaScript(
       throw new Error("Kakao login JavaScript did not become ready");
     });
 
-  const submitted = await page
+  const prepared = await page
     .evaluate(
-      async ({ accountId, password }) => {
+      ({ accountId, password }) => {
         const account = document.querySelector<HTMLInputElement>(
           'input[name="loginKey"], input[name="loginId"]',
         );
         const passwordInput = document.querySelector<HTMLInputElement>('input[name="password"]');
-        const form = account?.form ?? passwordInput?.form;
         if (!account || !passwordInput) return false;
 
         const valueSetter = Object.getOwnPropertyDescriptor(
@@ -304,29 +303,37 @@ async function submitKakaoLoginWithPageJavaScript(
         };
         setValue(account, accountId);
         setValue(passwordInput, password);
-
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-
-        const submitter =
-          form?.querySelector<HTMLButtonElement | HTMLInputElement>(
-            'button[type="submit"], input[type="submit"]',
-          ) ??
-          document.querySelector<HTMLButtonElement | HTMLInputElement>(
-            'button[type="submit"], input[type="submit"]',
-          );
-        if (submitter) {
-          setTimeout(() => submitter.click(), 0);
-        } else if (form && typeof form.requestSubmit === "function") {
-          setTimeout(() => form.requestSubmit(), 0);
-        } else {
-          return false;
-        }
         return true;
       },
       { accountId, password },
     )
+    .catch(() => false);
+  if (!prepared) throw new Error("Kakao login JavaScript could not prepare credentials");
+
+  await sleep(50);
+  const submitted = await page
+    .evaluate(() => {
+      const account = document.querySelector<HTMLInputElement>(
+        'input[name="loginKey"], input[name="loginId"]',
+      );
+      const passwordInput = document.querySelector<HTMLInputElement>('input[name="password"]');
+      const form = account?.form ?? passwordInput?.form;
+      const submitter =
+        form?.querySelector<HTMLButtonElement | HTMLInputElement>(
+          'button[type="submit"], input[type="submit"]',
+        ) ??
+        document.querySelector<HTMLButtonElement | HTMLInputElement>(
+          'button[type="submit"], input[type="submit"]',
+        );
+      if (submitter) {
+        setTimeout(() => submitter.click(), 0);
+      } else if (form && typeof form.requestSubmit === "function") {
+        setTimeout(() => form.requestSubmit(), 0);
+      } else {
+        return false;
+      }
+      return true;
+    })
     .catch(() => false);
   if (!submitted) throw new Error("Kakao login JavaScript submission failed");
 }
