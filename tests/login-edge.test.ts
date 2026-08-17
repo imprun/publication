@@ -118,12 +118,16 @@ function createBrowserHarness(outcome: LoginOutcome) {
       }
       if (source.includes("getHighEntropyValues"))
         return {
-          a: "783836",
-          b: "3634",
-          m: "",
-          mo: 0,
-          p: "57696e646f7773",
-          pv: "31352e30",
+          botSignals: [37, 44],
+          mousePositions: [{ x: "1000", y: "2000", t: 1_700_000_000_000, e: 4 }],
+          userAgentHints: {
+            a: "783836",
+            b: "3634",
+            m: "",
+            mo: 0,
+            p: "57696e646f7773",
+            pv: "31352e30",
+          },
         };
       if (argument && typeof argument === "object") {
         const request = argument as {
@@ -143,12 +147,15 @@ function createBrowserHarness(outcome: LoginOutcome) {
             | undefined;
           securityContextMatches =
             Array.isArray(securityContext?.a) &&
-            securityContext.a.length === 0 &&
+            securityContext.a.length === 1 &&
+            typeof (securityContext.a[0] as { x?: unknown }).x === "string" &&
+            (securityContext.a[0] as { e?: unknown }).e === 4 &&
             typeof securityContext.b?.m === "string" &&
             typeof securityContext.b?.mo === "number" &&
-            securityContext.c === false &&
+            securityContext.c === true &&
             Array.isArray(securityContext.d) &&
-            securityContext.d.length === 0;
+            securityContext.d.includes(37) &&
+            securityContext.d.includes(44);
           if (outcome === "automatic-success") {
             return {
               httpStatus: 200,

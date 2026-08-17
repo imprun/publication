@@ -38,10 +38,17 @@ const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
 
 interface KakaoLoginBootstrap {
+  botSignals: number[];
   csrf: string;
   encryptionPassphrase?: string;
   loginUrl: string;
   locale: string;
+  mousePositions: Array<{
+    x: string;
+    y: string;
+    t: number;
+    e: 4;
+  }>;
   userAgentHints: {
     a?: string;
     b?: string;
@@ -306,10 +313,10 @@ async function authenticateKakaoAccount(
     loginUrl: bootstrap.loginUrl,
     lang: bootstrap.locale,
     security_context: {
-      a: [],
+      a: bootstrap.mousePositions,
       b: bootstrap.userAgentHints,
-      c: false,
-      d: [],
+      c: bootstrap.botSignals.length > 0,
+      d: bootstrap.botSignals,
     },
     ...(bootstrap.encryptionPassphrase ? { k: true } : {}),
   });
@@ -358,7 +365,7 @@ async function readKakaoLoginBootstrap(
     throw new Error(`Kakao login bootstrap was not available at ${safePageLocation(page.url())}`);
   }
 
-  const userAgentHints = await page.evaluate(async () => {
+  const browserContext = await page.evaluate(async () => {
     const encodeUserAgentValue = (value: string) =>
       Array.from(value)
         .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
@@ -409,16 +416,42 @@ async function readKakaoLoginBootstrap(
       };
     }
 
-    return userAgentHints;
+    const botSignals: number[] = [];
+    const webdriverDetected =
+      navigator.webdriver ||
+      Object.keys(window).some((key) => key.startsWith("cdc_")) ||
+      Object.keys(document).some((key) => key.startsWith("cdc_"));
+    if (webdriverDetected) botSignals.push(11);
+    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+      const hasTouch = "ontouchstart" in window || typeof TouchEvent !== "undefined";
+      if (!hasTouch || navigator.maxTouchPoints === 0) botSignals.push(23);
+    }
+
+    // Kakao's current login client always appends the submit button center as
+    // event type 4. An HTTP-only submission has no trusted DOM event and no
+    // physical pointer history, so the same client reports signals 37 and 44.
+    botSignals.push(37, 44);
+    const mousePositions: KakaoLoginBootstrap["mousePositions"] = [
+      {
+        x: Math.round((window.innerWidth / 2) * 10_000).toString(16),
+        y: Math.round((window.innerHeight / 2) * 10_000).toString(16),
+        t: Date.now(),
+        e: 4,
+      },
+    ];
+
+    return { botSignals, mousePositions, userAgentHints };
   });
   return {
+    botSignals: browserContext.botSignals,
     csrf,
     ...(typeof encryptionPassphrase === "string" && encryptionPassphrase
       ? { encryptionPassphrase }
       : {}),
     loginUrl,
     locale,
-    userAgentHints,
+    mousePositions: browserContext.mousePositions,
+    userAgentHints: browserContext.userAgentHints,
   };
 }
 
