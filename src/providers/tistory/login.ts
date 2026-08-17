@@ -372,8 +372,8 @@ async function waitForKakaoCaptcha(
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new Error("Kakao login did not complete before the login deadline");
 
-  return withTimeout(
-    page.evaluate(
+  await page
+    .evaluate(
       async ({ scriptSrc, widgetId }) => {
         document.title = "Kakao verification";
         const root = document.createElement("main");
@@ -383,6 +383,7 @@ async function waitForKakaoCaptcha(
         document.body.replaceChildren(root);
 
         const globalObject = window as typeof window & {
+          __publicationKakaoCaptchaToken?: string;
           dkaptcha?: {
             render: (
               elementId: string,
@@ -411,24 +412,41 @@ async function waitForKakaoCaptcha(
           });
         }
         if (!globalObject.dkaptcha) throw new Error("CAPTCHA API is unavailable");
-        return new Promise<string>((resolve) => {
-          globalObject.dkaptcha
-            ?.render(root.id, {
-              widget: widgetId,
-              theme: "white",
-              language: navigator.language.startsWith("ko") ? "ko" : "en",
-              option: "iframe",
-            })
-            .addCallbackListener((result) => {
-              if (typeof result.token === "string" && result.token) resolve(result.token);
-            });
-        });
+        globalObject.dkaptcha
+          .render(root.id, {
+            widget: widgetId,
+            theme: "white",
+            language: navigator.language.startsWith("ko") ? "ko" : "en",
+            option: "iframe",
+          })
+          .addCallbackListener((result) => {
+            if (typeof result.token === "string" && result.token) {
+              globalObject.__publicationKakaoCaptchaToken = result.token;
+            }
+          });
       },
       { scriptSrc: scriptURL.href, widgetId: challenge.widgetId },
-    ),
-    remaining,
-    "Kakao CAPTCHA verification did not complete before the login deadline",
-  );
+    )
+    .catch(() => {
+      throw new Error("Kakao CAPTCHA widget could not be initialized");
+    });
+
+  while (Date.now() < deadline) {
+    const token = await page.evaluate(() => {
+      const globalObject = window as typeof window & {
+        __publicationKakaoCaptchaToken?: string;
+      };
+      const value = globalObject.__publicationKakaoCaptchaToken;
+      if (typeof value === "string" && value) {
+        delete globalObject.__publicationKakaoCaptchaToken;
+        return value;
+      }
+      return null;
+    });
+    if (token) return token;
+    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+  }
+  throw new Error("Kakao CAPTCHA verification did not complete before the login deadline");
 }
 
 async function readKakaoLoginBootstrap(

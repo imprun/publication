@@ -219,6 +219,9 @@ function createBrowserHarness(outcome: LoginOutcome) {
         return authenticated;
       }
       if (source.includes("globalObject.dkaptcha") && source.includes("addCallbackListener")) {
+        return undefined;
+      }
+      if (source.includes("delete globalObject.__publicationKakaoCaptchaToken")) {
         return "fixture-captcha-token";
       }
       if (source.includes("requiredFields") && source.includes("DOMParser")) {
