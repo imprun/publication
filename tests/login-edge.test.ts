@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginToTistory } from "../src/providers/tistory/login.js";
 import { mockContext } from "./helpers.js";
 
@@ -19,10 +19,168 @@ const input = {
   password: "fixture-only",
 };
 
+type HumanOutcome = "success" | "cancel" | "expired" | "authentication-failure";
+
+function createBrowserHarness(outcome: HumanOutcome) {
+  let currentURL = "about:blank";
+  let authenticated = false;
+  let rootClosed = false;
+  let popupClosed = false;
+  const loginID = { isVisible: vi.fn(async () => true) };
+  const password = { isVisible: vi.fn(async () => true) };
+  const saveSignedIn = {
+    isVisible: vi.fn(async () => false),
+    evaluate: vi.fn(async () => false),
+    click: vi.fn(async () => {}),
+  };
+  const loginLocator = { fill: vi.fn(async () => {}) };
+  const passwordLocator = { fill: vi.fn(async () => {}) };
+  const originalPage = {
+    close: vi.fn(async () => {}),
+    evaluate: vi.fn(),
+  };
+  const originalTarget = {
+    opener: () => undefined,
+    page: vi.fn(async () => originalPage),
+  };
+  const targets: Array<{
+    opener: () => (typeof rootTarget | typeof originalTarget) | undefined;
+    page: () => Promise<typeof page | typeof originalPage | typeof popupPage>;
+  }> = [originalTarget];
+
+  const popupPage = {
+    isClosed: () => popupClosed,
+    close: vi.fn(async () => {
+      popupClosed = true;
+      const index = targets.indexOf(popupTarget);
+      if (index >= 0) targets.splice(index, 1);
+    }),
+  };
+  const popupTarget = {
+    opener: () => rootTarget,
+    page: vi.fn(async () => popupPage),
+  };
+  const submit = {
+    isVisible: vi.fn(async () => true),
+    click: vi.fn(async () => {
+      targets.push(popupTarget);
+    }),
+  };
+  const page = {
+    goto: vi.fn(async (url: string) => {
+      currentURL = url.includes("/manage/posts/")
+        ? authenticated
+          ? url
+          : "https://accounts.kakao.com/login"
+        : "https://accounts.kakao.com/login";
+    }),
+    url: vi.fn(() => currentURL),
+    $: vi.fn(async (selector: string) => {
+      if (selector.includes("loginId")) return loginID;
+      if (selector.includes("password")) return password;
+      if (selector.includes('button[type="submit"]')) return submit;
+      return saveSignedIn;
+    }),
+    waitForNavigation: vi.fn(async () => null),
+    locator: vi.fn((selector: string) => {
+      if (selector.includes("loginId")) return loginLocator;
+      return passwordLocator;
+    }),
+    evaluate: vi.fn(async (pageFunction: unknown, argument?: string) => {
+      if (argument?.includes("/manage/posts.json")) return outcome === "success";
+      const source = String(pageFunction);
+      if (source.includes("navigator.userAgent")) return "fixture-user-agent";
+      if (source.includes("window.localStorage")) return [{ name: "fixture", value: "local" }];
+      if (source.includes("sessionStorage")) return { fixture: "session" };
+      return undefined;
+    }),
+    cookies: vi.fn(async () => [
+      {
+        name: "session",
+        value: "fixture-cookie",
+        domain: ".tistory.com",
+        path: "/",
+        expires: -1,
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax" as const,
+      },
+    ]),
+    target: () => rootTarget,
+    isClosed: () => rootClosed,
+    close: vi.fn(async () => {
+      rootClosed = true;
+      const index = targets.indexOf(rootTarget);
+      if (index >= 0) targets.splice(index, 1);
+    }),
+  };
+  const rootTarget = {
+    opener: () => undefined,
+    page: vi.fn(async () => page),
+  };
+  const browserContext = {
+    newPage: vi.fn(async () => {
+      targets.push(rootTarget);
+      return page;
+    }),
+  };
+  browserMocks.connect.mockResolvedValue({
+    defaultBrowserContext: () => browserContext,
+    targets: () => [...targets],
+    disconnect: browserMocks.disconnect,
+  });
+
+  const ctx = mockContext(fetch);
+  const setVariable = vi.fn(async (path: string) => ({ path, revision: 1 }));
+  const setResource = vi.fn(async (path: string) => ({ path, revision: 1 }));
+  ctx.variables.set = setVariable;
+  ctx.resources.set = setResource;
+  ctx.capabilities = {
+    available: ["edge-cdp/v1"],
+    headers: { Authorization: "Bearer job-scoped-fixture" },
+    has: (capability) => capability === "edge-cdp/v1",
+    endpoint: () => "http://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
+    webSocketEndpoint: () => "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
+  };
+  ctx.human.wait = async <T>() => {
+    if (outcome === "expired") throw new Error("HumanTask is expired");
+    if (outcome === "cancel") return { taskId: "task-test", outcome: "cancel" };
+    authenticated = true;
+    currentURL = "https://www.tistory.com/";
+    return { taskId: "task-test", outcome: "submit", value: { completed: true } as T };
+  };
+
+  return {
+    ctx,
+    page,
+    popupPage,
+    originalPage,
+    loginLocator,
+    passwordLocator,
+    submit,
+    setVariable,
+    setResource,
+    targets,
+    baselineTargetCount: 1,
+  };
+}
+
+function expectOwnedTargetsCleaned(harness: ReturnType<typeof createBrowserHarness>) {
+  expect(harness.page.close).toHaveBeenCalledOnce();
+  expect(harness.popupPage.close).toHaveBeenCalledOnce();
+  expect(harness.originalPage.close).not.toHaveBeenCalled();
+  expect(harness.targets).toHaveLength(harness.baselineTargetCount);
+  expect(browserMocks.disconnect).toHaveBeenCalledOnce();
+}
+
 describe("Tistory Browser Edge login", () => {
   beforeEach(() => {
     browserMocks.connect.mockReset();
     browserMocks.disconnect.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("fails closed before loading Puppeteer when no edge-cdp run is assigned", async () => {
@@ -33,61 +191,61 @@ describe("Tistory Browser Edge login", () => {
     expect(browserMocks.connect).not.toHaveBeenCalled();
   });
 
-  it("connects to the Job-scoped CDP WebSocket and disconnects on HumanTask cancel", async () => {
-    const loginID = { isVisible: vi.fn(async () => true) };
-    const password = { isVisible: vi.fn(async () => true) };
-    const saveSignedIn = {
-      isVisible: vi.fn(async () => false),
-      evaluate: vi.fn(async () => false),
-      click: vi.fn(async () => {}),
-    };
-    const submit = {
-      isVisible: vi.fn(async () => true),
-      click: vi.fn(async () => {}),
-    };
-    const loginLocator = { fill: vi.fn(async () => {}) };
-    const passwordLocator = { fill: vi.fn(async () => {}) };
-    const page = {
-      goto: vi.fn(async () => {}),
-      $: vi.fn(async (selector: string) => {
-        if (selector.includes("loginId")) return loginID;
-        if (selector.includes("password")) return password;
-        if (selector.includes('button[type="submit"]')) return submit;
-        return saveSignedIn;
-      }),
-      waitForNavigation: vi.fn(async () => null),
-      locator: vi.fn((selector: string) => {
-        if (selector.includes("loginId")) return loginLocator;
-        return passwordLocator;
-      }),
-    };
-    const browserContext = { newPage: vi.fn(async () => page) };
-    browserMocks.connect.mockResolvedValue({
-      defaultBrowserContext: () => browserContext,
-      disconnect: browserMocks.disconnect,
+  it("closes only the created target tree when the HumanTask is canceled", async () => {
+    const harness = createBrowserHarness("cancel");
+
+    await expect(loginToTistory(input, harness.ctx)).rejects.toThrow("Tistory login was canceled");
+
+    expect(harness.loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
+    expect(harness.passwordLocator.fill).toHaveBeenCalledWith("fixture-only");
+    expect(harness.submit.click).toHaveBeenCalledOnce();
+    expect(harness.setVariable).not.toHaveBeenCalled();
+    expect(harness.setResource).not.toHaveBeenCalled();
+    expectOwnedTargetsCleaned(harness);
+  });
+
+  it("restores the target baseline when the HumanTask expires", async () => {
+    const harness = createBrowserHarness("expired");
+
+    await expect(loginToTistory(input, harness.ctx)).rejects.toThrow("HumanTask is expired");
+
+    expect(harness.setVariable).not.toHaveBeenCalled();
+    expect(harness.setResource).not.toHaveBeenCalled();
+    expectOwnedTargetsCleaned(harness);
+  });
+
+  it("waits for the management API and stores only an authenticated session", async () => {
+    const harness = createBrowserHarness("success");
+
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      provider: "tistory",
+      connectionId: "default",
+      authenticated: true,
     });
 
-    const ctx = mockContext(fetch);
-    ctx.capabilities = {
-      available: ["edge-cdp/v1"],
-      headers: { Authorization: "Bearer job-scoped-fixture" },
-      has: (capability) => capability === "edge-cdp/v1",
-      endpoint: () => "http://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
-      webSocketEndpoint: () => "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
-    };
-    ctx.human.wait = async () => ({ taskId: "task-test", outcome: "cancel" });
+    expect(harness.page.cookies).toHaveBeenCalledWith(
+      "https://example.tistory.com/",
+      "https://www.tistory.com/",
+    );
+    expect(harness.originalPage.evaluate).not.toHaveBeenCalled();
+    expect(harness.setVariable).toHaveBeenCalledOnce();
+    expect(harness.setResource).toHaveBeenCalledOnce();
+    expectOwnedTargetsCleaned(harness);
+  });
 
-    await expect(loginToTistory(input, ctx)).rejects.toThrow("Tistory login was canceled");
-    expect(browserMocks.connect).toHaveBeenCalledWith({
-      browserWSEndpoint: "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
-      headers: { Authorization: "Bearer job-scoped-fixture" },
-    });
-    expect(page.goto).toHaveBeenCalledWith("https://example.tistory.com/manage/newpost", {
-      waitUntil: "domcontentloaded",
-    });
-    expect(loginLocator.fill).toHaveBeenCalledWith("fixture@example.invalid");
-    expect(passwordLocator.fill).toHaveBeenCalledWith("fixture-only");
-    expect(submit.click).toHaveBeenCalledOnce();
-    expect(browserMocks.disconnect).toHaveBeenCalledOnce();
+  it("does not store a session when authentication never reaches the read-only API", async () => {
+    vi.useFakeTimers();
+    const harness = createBrowserHarness("authentication-failure");
+    const login = loginToTistory(input, harness.ctx);
+    const assertion = expect(login).rejects.toThrow(
+      "Tistory management session was not established before the login deadline",
+    );
+
+    await vi.advanceTimersByTimeAsync(100_000);
+    await assertion;
+
+    expect(harness.setVariable).not.toHaveBeenCalled();
+    expect(harness.setResource).not.toHaveBeenCalled();
+    expectOwnedTargetsCleaned(harness);
   });
 });

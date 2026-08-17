@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   credentialVariableRequests,
+  humanTaskDecisionRequest,
   loginInputConfigRequest,
   loginRunInput,
   parseCredentialsEnv,
@@ -46,6 +47,16 @@ describe("Tistory login E2E CLI contract", () => {
   it("keeps credentials out of the persisted Run input", () => {
     expect(loginRunInput("https://pak2251.tistory.com/manage")).toEqual({
       blogHost: "pak2251.tistory.com",
+    });
+  });
+
+  it("uses the dedicated idempotent HumanTask CLI command", () => {
+    expect(humanTaskDecisionRequest("task-1", "approve")).toEqual({
+      args: ["human-task", "decide", "task-1", "--outcome", "submit", "--value-file", "-"],
+      input: { completed: true },
+    });
+    expect(humanTaskDecisionRequest("task-2", "cancel")).toEqual({
+      args: ["human-task", "decide", "task-2", "--outcome", "cancel"],
     });
   });
 });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
-import type { BrowserContext, Page } from "puppeteer-core";
+import type { Browser, Page, Target } from "puppeteer-core";
 import {
   TISTORY_CONNECTION_RESOURCE_TYPE,
   TISTORY_PROFILE_PATH,
@@ -16,6 +16,20 @@ interface LoginApproval {
   completed: boolean;
 }
 
+export interface TistoryLoginResult {
+  provider: "tistory";
+  connectionId: "default";
+  blogHost: string;
+  publicUrl: string;
+  capturedAt: string;
+  authenticated: true;
+}
+
+const AUTHENTICATION_WAIT_TIMEOUT_MS = 90_000;
+const AUTHENTICATION_POLL_INTERVAL_MS = 750;
+const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
+const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
+
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
   const host = normalizeTistoryHost(input.blogHost);
   const origin = tistoryOrigin(host);
@@ -27,82 +41,124 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
     browserWSEndpoint: ctx.capabilities.webSocketEndpoint("edge-cdp"),
     headers: { ...ctx.capabilities.headers },
   });
-  const context = browser.defaultBrowserContext();
-  const page = await context.newPage();
+  let rootTarget: Target | undefined;
+  let result: TistoryLoginResult | undefined;
+  let actionError: unknown;
   try {
-    await page.goto(`${origin}/manage/newpost`, { waitUntil: "domcontentloaded" });
-    await openKakaoLoginIfNeeded(page);
-    await fillCredentialsIfPresent(page, input.accountId, input.password);
-    await submitCredentialsIfPresent(page, input.accountId, input.password);
+    const context = browser.defaultBrowserContext();
+    const page = await context.newPage();
+    rootTarget = page.target();
+    result = await performLogin(input, ctx, host, origin, page);
+  } catch (error) {
+    actionError = error;
+  }
 
-    const decision = await waitForHumanDecision<LoginApproval>(ctx, {
-      key: "tistory-kakao-login",
-      kind: "form",
-      title: "카카오 로그인을 완료해 주세요",
-      description:
-        "계정 입력과 로그인을 자동 제출했습니다. 열린 브라우저에서 CAPTCHA 또는 2단계 인증을 끝낸 뒤 승인해 주세요.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["completed"],
-        properties: {
-          completed: {
-            type: "boolean",
-            const: true,
-            title: "로그인을 완료했습니다",
-          },
+  const cleanupErrors: unknown[] = [];
+  try {
+    if (rootTarget) await closeOwnedTargetTree(browser, rootTarget);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    await browser.disconnect();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+
+  if (actionError !== undefined) {
+    if (cleanupErrors.length > 0) {
+      ctx.logger.warn("Tistory login failed and browser target cleanup did not complete");
+    }
+    throw actionError;
+  }
+  if (cleanupErrors.length > 0) {
+    throw new Error("Tistory browser target cleanup did not complete");
+  }
+  if (!result) throw new Error("Tistory login did not produce a result");
+  return result;
+}
+
+async function performLogin(
+  input: ConnectionLoginInput,
+  ctx: WindforceContext,
+  host: string,
+  origin: string,
+  page: Page,
+): Promise<TistoryLoginResult> {
+  await page.goto(`${origin}/manage/newpost`, { waitUntil: "domcontentloaded" });
+  await openKakaoLoginIfNeeded(page);
+  await fillCredentialsIfPresent(page, input.accountId, input.password);
+  await submitCredentialsIfPresent(page, input.accountId, input.password);
+
+  const decision = await waitForHumanDecision<LoginApproval>(ctx, {
+    key: "tistory-kakao-login",
+    kind: "form",
+    title: "카카오 로그인을 완료해 주세요",
+    description:
+      "계정 입력과 로그인을 자동 제출했습니다. 열린 브라우저에서 CAPTCHA 또는 2단계 인증을 끝낸 뒤 승인해 주세요.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["completed"],
+      properties: {
+        completed: {
+          type: "boolean",
+          const: true,
+          title: "로그인을 완료했습니다",
         },
       },
-      privateContext: { provider: "tistory", connectionId: "default", blogHost: host },
-      timeoutMs: 10 * 60 * 1000,
-    });
-    if (decision.outcome === "cancel" || decision.value?.completed !== true) {
-      throw new Error("Tistory login was canceled");
-    }
-
-    await verifyAuthenticated(page, origin, host);
-    const capturedAt = new Date().toISOString();
-    const storageState = await captureStorageState(context);
-    if (!storageState.cookies.some((cookie) => cookie.domain.includes("tistory.com"))) {
-      throw new Error("Tistory session cookie was not captured");
-    }
-    const sessionStorage = await captureSessionStorage(context);
-    const userAgent = await page.evaluate(() => navigator.userAgent);
-    const secret: TistorySession = {
-      version: 1,
-      capturedAt,
-      userAgent,
-      storageState,
-      sessionStorage,
-    };
-    const profile: TistoryConnection = {
-      version: 1,
-      provider: "tistory",
-      connectionId: "default",
-      blogHost: host,
-      publicUrl: `${origin}/`,
-      manageUrl: `${origin}/manage`,
-      capturedAt,
-      sessionSecretRef: TISTORY_SESSION_REFERENCE,
-    };
-
-    await ctx.variables.set(TISTORY_SESSION_PATH, JSON.stringify(secret), {
-      operationId: randomUUID(),
-    });
-    await ctx.resources.set(TISTORY_PROFILE_PATH, profile, TISTORY_CONNECTION_RESOURCE_TYPE, {
-      operationId: randomUUID(),
-    });
-    return {
-      provider: "tistory" as const,
-      connectionId: "default" as const,
-      blogHost: host,
-      publicUrl: profile.publicUrl,
-      capturedAt,
-      authenticated: true as const,
-    };
-  } finally {
-    await browser.disconnect();
+    },
+    privateContext: { provider: "tistory", connectionId: "default", blogHost: host },
+    timeoutMs: 10 * 60 * 1000,
+  });
+  if (decision.outcome === "cancel" || decision.value?.completed !== true) {
+    throw new Error("Tistory login was canceled");
   }
+
+  await waitForAuthenticatedSession(page, origin, host);
+  const capturedAt = new Date().toISOString();
+  const storageState = await captureStorageState(page, origin);
+  if (
+    !storageState.cookies.some(
+      (cookie) => cookie.domain === "tistory.com" || cookie.domain.endsWith(".tistory.com"),
+    )
+  ) {
+    throw new Error("Tistory session cookie was not captured");
+  }
+  const sessionStorage = await captureSessionStorage(page);
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+  const secret: TistorySession = {
+    version: 1,
+    capturedAt,
+    userAgent,
+    storageState,
+    sessionStorage,
+  };
+  const profile: TistoryConnection = {
+    version: 1,
+    provider: "tistory",
+    connectionId: "default",
+    blogHost: host,
+    publicUrl: `${origin}/`,
+    manageUrl: `${origin}/manage`,
+    capturedAt,
+    sessionSecretRef: TISTORY_SESSION_REFERENCE,
+  };
+
+  await ctx.variables.set(TISTORY_SESSION_PATH, JSON.stringify(secret), {
+    operationId: randomUUID(),
+  });
+  await ctx.resources.set(TISTORY_PROFILE_PATH, profile, TISTORY_CONNECTION_RESOURCE_TYPE, {
+    operationId: randomUUID(),
+  });
+  return {
+    provider: "tistory",
+    connectionId: "default",
+    blogHost: host,
+    publicUrl: profile.publicUrl,
+    capturedAt,
+    authenticated: true,
+  };
 }
 
 async function loadPuppeteer(): Promise<typeof import("puppeteer-core")> {
@@ -151,27 +207,57 @@ async function submitCredentialsIfPresent(page: Page, accountId?: string, passwo
   await navigation;
 }
 
-async function verifyAuthenticated(page: Page, origin: string, host: string): Promise<void> {
-  if (page.url().includes("accounts.kakao.com")) {
-    throw new Error("Kakao login has not completed");
-  }
-  await page.goto(`${origin}/manage/posts/`, { waitUntil: "domcontentloaded" });
-  if (new URL(page.url()).hostname !== host || page.url().includes("/auth/")) {
-    throw new Error("Tistory management session could not be verified");
-  }
-  const status = await page.evaluate(
-    async (endpoint) =>
-      (
-        await fetch(endpoint, {
-          credentials: "include",
-          redirect: "manual",
+async function waitForAuthenticatedSession(
+  page: Page,
+  origin: string,
+  host: string,
+): Promise<void> {
+  const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+  const managementURL = `${origin}/manage/posts/`;
+  const apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`;
+
+  while (Date.now() < deadline) {
+    let currentURL = parsePageURL(page.url());
+    if (!currentURL || !isAuthenticatedManagementURL(currentURL, host)) {
+      const remaining = deadline - Date.now();
+      await page
+        .goto(managementURL, {
+          waitUntil: "domcontentloaded",
+          timeout: Math.max(1, Math.min(10_000, remaining)),
         })
-      ).status,
-    `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`,
-  );
-  if (status < 200 || status >= 300) {
-    throw new Error("Tistory management API rejected the captured session");
+        .catch(() => null);
+      currentURL = parsePageURL(page.url());
+    }
+    if (currentURL && isAuthenticatedManagementURL(currentURL, host)) {
+      const apiAuthenticated = await page
+        .evaluate(async (endpoint) => {
+          const response = await fetch(endpoint, {
+            credentials: "include",
+            redirect: "manual",
+          });
+          const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+          return response.status >= 200 && response.status < 300 && contentType.includes("json");
+        }, apiURL)
+        .catch(() => false);
+      if (apiAuthenticated) return;
+    }
+    await sleep(Math.min(AUTHENTICATION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
   }
+  throw new Error("Tistory management session was not established before the login deadline");
+}
+
+function parsePageURL(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isAuthenticatedManagementURL(url: URL, host: string): boolean {
+  return (
+    url.hostname === host && url.pathname.startsWith("/manage/") && !url.pathname.includes("/auth/")
+  );
 }
 
 async function isVisible(page: Page, selector: string): Promise<boolean> {
@@ -180,9 +266,10 @@ async function isVisible(page: Page, selector: string): Promise<boolean> {
 }
 
 async function captureStorageState(
-  context: BrowserContext,
+  page: Page,
+  origin: string,
 ): Promise<TistorySession["storageState"]> {
-  const cookies = (await context.cookies()).map((cookie) => ({
+  const cookies = (await page.cookies(`${origin}/`, "https://www.tistory.com/")).map((cookie) => ({
     name: cookie.name,
     value: cookie.value,
     domain: cookie.domain,
@@ -195,29 +282,56 @@ async function captureStorageState(
         ? cookie.sameSite
         : ("Lax" as const),
   }));
-  const origins: TistorySession["storageState"]["origins"] = [];
-  const seen = new Set<string>();
-  for (const page of await context.pages()) {
-    const url = new URL(page.url());
-    if (url.protocol !== "https:" || seen.has(url.origin)) continue;
-    const localStorage = await page
-      .evaluate(() => Object.entries(window.localStorage).map(([name, value]) => ({ name, value })))
-      .catch(() => []);
-    origins.push({ origin: url.origin, localStorage });
-    seen.add(url.origin);
-  }
+  const pageURL = new URL(page.url());
+  if (pageURL.origin !== origin) throw new Error("Tistory page left the authenticated origin");
+  const localStorage = await page.evaluate(() =>
+    Object.entries(window.localStorage).map(([name, value]) => ({ name, value })),
+  );
+  const origins: TistorySession["storageState"]["origins"] = [
+    { origin: pageURL.origin, localStorage },
+  ];
   return { cookies, origins };
 }
 
-async function captureSessionStorage(context: BrowserContext) {
-  const values: Array<{ origin: string; items: Record<string, string> }> = [];
-  for (const page of await context.pages()) {
-    const url = new URL(page.url());
-    if (url.protocol !== "https:") continue;
-    const items = await page
-      .evaluate(() => Object.fromEntries(Object.entries(sessionStorage)))
-      .catch(() => ({}));
-    values.push({ origin: url.origin, items });
+async function captureSessionStorage(page: Page) {
+  const pageURL = new URL(page.url());
+  const items = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage)));
+  return [{ origin: pageURL.origin, items }];
+}
+
+async function closeOwnedTargetTree(browser: Browser, rootTarget: Target): Promise<void> {
+  const deadline = Date.now() + TARGET_CLEANUP_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const ownedTargets = browser.targets().map((target) => ({
+      target,
+      depth: ownedTargetDepth(target, rootTarget),
+    }));
+    const remaining = ownedTargets
+      .filter(({ depth }) => depth >= 0)
+      .sort((left, right) => right.depth - left.depth);
+    if (remaining.length === 0) return;
+    for (const { target } of remaining) {
+      const ownedPage = await target.page().catch(() => null);
+      if (ownedPage && !ownedPage.isClosed()) {
+        await ownedPage.close({ runBeforeUnload: false }).catch(() => undefined);
+      }
+    }
+    await sleep(TARGET_CLEANUP_POLL_INTERVAL_MS);
   }
-  return values;
+  throw new Error("Tistory browser target cleanup timed out");
+}
+
+function ownedTargetDepth(target: Target, rootTarget: Target): number {
+  let current: Target | undefined = target;
+  let depth = 0;
+  while (current) {
+    if (current === rootTarget) return depth;
+    current = current.opener();
+    depth += 1;
+  }
+  return -1;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
