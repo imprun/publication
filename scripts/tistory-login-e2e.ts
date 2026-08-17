@@ -45,6 +45,21 @@ interface HumanTaskList {
   items: HumanTaskView[];
 }
 
+export function humanTaskDecisionRequest(
+  taskId: string,
+  answer: "approve" | "cancel",
+): { args: string[]; input?: unknown } {
+  if (answer === "approve") {
+    return {
+      args: ["human-task", "decide", taskId, "--outcome", "submit", "--value-file", "-"],
+      input: { completed: true },
+    };
+  }
+  return {
+    args: ["human-task", "decide", taskId, "--outcome", "cancel"],
+  };
+}
+
 export function parseCredentialsJson(source: string): LoginCredentials {
   const value: unknown = JSON.parse(source);
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -262,15 +277,8 @@ async function decideHumanTask(context: string, task: HumanTaskView): Promise<vo
     if (answer !== "approve" && answer !== "cancel") {
       throw new Error('HumanTask decision must be "approve" or "cancel"');
     }
-    const body =
-      answer === "approve"
-        ? { outcome: "submit", value: { completed: true } }
-        : { outcome: "cancel" };
-    await imprunJson(
-      context,
-      ["api", `human-tasks/${task.id}/decision`, "--method", "POST", "--input", "-"],
-      body,
-    );
+    const request = humanTaskDecisionRequest(task.id, answer);
+    await imprunJson(context, request.args, request.input, true);
   } finally {
     terminal.close();
   }
