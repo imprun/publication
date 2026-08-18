@@ -14,11 +14,8 @@ import type {
 import type { PublicationClient } from "./fixture-client";
 
 const APP_KEY = "publication";
-const CONNECTION_RESOURCE_PATH = "connections/tistory/default/profile";
 const ACCOUNT_ID_PATH = "connections/tistory/default/account-id";
 const PASSWORD_PATH = "connections/tistory/default/password";
-const ACCOUNT_ID_REFERENCE = `$var@app:${ACCOUNT_ID_PATH}`;
-const PASSWORD_REFERENCE = `$var@app:${PASSWORD_PATH}`;
 const TERMINAL_STATES = new Set(["succeeded", "completed", "failed", "cancelled", "canceled"]);
 
 interface RunView {
@@ -33,17 +30,10 @@ interface HumanTask {
   expires_at: string;
 }
 
-interface ResourceView {
-  app_key?: string;
-  path?: string;
-  value?: {
-    blogHost?: string;
-  };
-}
-
 interface ConnectionActionResult {
   blogHost: string;
-  authenticated: true;
+  authenticated: boolean;
+  status: "ready" | "missing" | "expired";
 }
 
 interface CategoryActionResult {
@@ -180,24 +170,7 @@ export class CloudPublicationClient implements PublicationClient {
     throw new Error(`${action} 작업의 제한 시간이 지났습니다.`);
   }
 
-  private async resourceConnection(): Promise<ConnectionSummary> {
-    const resources = await this.request<ResourceView[]>(this.workspacePath("resources"));
-    const resource = resources.find(
-      (candidate) => candidate.app_key === APP_KEY && candidate.path === CONNECTION_RESOURCE_PATH,
-    );
-    const blogHost = resource?.value?.blogHost;
-    return {
-      provider: "tistory",
-      connectionId: "default",
-      label: "Tistory",
-      blogHost: blogHost || "연결되지 않음",
-      status: blogHost ? "expired" : "missing",
-    };
-  }
-
   async connection(): Promise<ConnectionSummary> {
-    const resource = await this.resourceConnection();
-    if (resource.status === "missing") return resource;
     try {
       const run = await this.createRun("connection.status", {});
       const result = await this.waitForRun<ConnectionActionResult>(
@@ -209,14 +182,20 @@ export class CloudPublicationClient implements PublicationClient {
         provider: "tistory",
         connectionId: "default",
         label: "Tistory",
-        blogHost: result.blogHost,
-        status: result.authenticated ? "ready" : "expired",
+        blogHost: result.blogHost || "연결되지 않음",
+        status: result.status,
       };
     } catch (error) {
       if (error instanceof PublicationApiError && (error.status === 401 || error.status === 403)) {
         throw error;
       }
-      return resource;
+      return {
+        provider: "tistory",
+        connectionId: "default",
+        label: "Tistory",
+        blogHost: "연결되지 않음",
+        status: "missing",
+      };
     }
   }
 
@@ -252,19 +231,16 @@ export class CloudPublicationClient implements PublicationClient {
         this.workspacePath("variables"),
         {
           method: "POST",
-          body: JSON.stringify({ ...variable, is_secret: true, app_key: APP_KEY }),
+          body: JSON.stringify({
+            ...variable,
+            is_secret: true,
+            app_key: APP_KEY,
+            scope: "actor",
+          }),
         },
         true,
       );
     }
-    await this.request(this.workspacePath("apps", APP_KEY, "input-configs"), {
-      method: "PUT",
-      body: JSON.stringify({
-        action_key: "connection.login",
-        config: { accountId: ACCOUNT_ID_REFERENCE, password: PASSWORD_REFERENCE },
-        locked_keys: ["accountId", "password"],
-      }),
-    });
     onProgress?.("starting_login");
     const run = await this.createRun("connection.login", { blogHost });
     onProgress?.("waiting_for_kakao");
@@ -276,6 +252,18 @@ export class CloudPublicationClient implements PublicationClient {
       label: "Tistory",
       blogHost: result.blogHost,
       status: "ready",
+    };
+  }
+
+  async disconnect(): Promise<ConnectionSummary> {
+    const run = await this.createRun("connection.disconnect", {});
+    const result = await this.waitForRun<ConnectionActionResult>(run, "Tistory 연결 해제", 60_000);
+    return {
+      provider: "tistory",
+      connectionId: "default",
+      label: "Tistory",
+      blogHost: result.blogHost || "연결되지 않음",
+      status: "missing",
     };
   }
 

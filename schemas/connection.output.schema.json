@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["provider", "connectionId", "blogHost", "publicUrl", "authenticated"],
+  "required": ["provider", "connectionId", "blogHost", "publicUrl", "authenticated", "status"],
   "properties": {
     "provider": { "const": "tistory" },
     "connectionId": { "const": "default" },
@@ -10,6 +10,7 @@
     "publicUrl": { "type": "string", "format": "uri" },
     "capturedAt": { "type": "string", "format": "date-time" },
     "checkedAt": { "type": "string", "format": "date-time" },
-    "authenticated": { "const": true }
+    "authenticated": { "type": "boolean" },
+    "status": { "enum": ["ready", "missing", "expired"] }
   }
 }

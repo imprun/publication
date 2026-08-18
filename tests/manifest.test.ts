@@ -26,18 +26,28 @@ describe("Windforce manifest", () => {
     expect(loginSource).toContain('import(["puppeteer", "-core"].join(""))');
   });
 
-  it("grants session writes only to the browser login action", () => {
+  it("grants actor-scoped connection writes only to login and disconnect actions", () => {
     const login = manifest.actions["connection.login"];
     expect(login.runsOn).toEqual(["browser"]);
     expect(login.runtimeAccess.writeVariables).toEqual([
       {
-        scope: "app",
+        scope: "actor",
         path: "connections/tistory/default/session",
+        storage: "secret",
+      },
+      {
+        scope: "actor",
+        path: "connections/tistory/default/account-id",
+        storage: "secret",
+      },
+      {
+        scope: "actor",
+        path: "connections/tistory/default/password",
         storage: "secret",
       },
     ]);
     for (const [name, action] of Object.entries(manifest.actions)) {
-      if (name === "connection.login") continue;
+      if (name === "connection.login" || name === "connection.disconnect") continue;
       expect((action as Record<string, unknown>).runtimeAccess).not.toMatchObject({
         writeVariables: expect.anything(),
         writeResources: expect.anything(),
@@ -50,22 +60,22 @@ describe("Windforce manifest", () => {
       const access = (action as { runtimeAccess?: Record<string, unknown> }).runtimeAccess;
       if (!access || name === "post.prepare") continue;
       expect(access.variables).toContainEqual({
-        scope: "app",
+        scope: "actor",
         path: "connections/tistory/default/session",
       });
       expect(access.resources).toContainEqual({
-        scope: "app",
+        scope: "actor",
         path: "connections/tistory/default/profile",
       });
     }
   });
 
-  it("marks credentials and raw media as write-only and leaks no session schema", () => {
+  it("keeps credentials out of Run input schemas and leaks no session schema", () => {
     const loginSchema = JSON.parse(
       readFileSync(join(root, "schemas", "connection.login.input.schema.json"), "utf8"),
     );
-    expect(loginSchema.properties.accountId.writeOnly).toBe(true);
-    expect(loginSchema.properties.password.writeOnly).toBe(true);
+    expect(loginSchema.properties.accountId).toBeUndefined();
+    expect(loginSchema.properties.password).toBeUndefined();
     expect(loginSchema.required).toEqual(["blogHost"]);
 
     for (const filename of readdirSync(join(root, "schemas")).filter((name) =>

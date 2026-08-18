@@ -6,42 +6,86 @@
     "connection.login": {
       "inputSchema": "schemas/connection.login.input.schema.json",
       "outputSchema": "schemas/connection.output.schema.json",
-      "operatorSettingsSchema": "schemas/connection.login.settings.schema.json",
       "runsOn": [
         "browser"
       ],
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           },
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/account-id"
           },
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/password"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ],
         "writeVariables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session",
+            "storage": "secret"
+          },
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/account-id",
+            "storage": "secret"
+          },
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/password",
             "storage": "secret"
           }
         ],
         "writeResources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
+          }
+        ]
+      }
+    },
+    "connection.disconnect": {
+      "inputSchema": "schemas/connection.input.schema.json",
+      "outputSchema": "schemas/connection.output.schema.json",
+      "runtimeAccess": {
+        "variables": [
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/session"
+          }
+        ],
+        "resources": [
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/profile"
+          }
+        ],
+        "writeVariables": [
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/session",
+            "storage": "secret"
+          },
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/account-id",
+            "storage": "secret"
+          },
+          {
+            "scope": "actor",
+            "path": "connections/tistory/default/password",
+            "storage": "secret"
           }
         ]
       }
@@ -52,13 +96,13 @@
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ]
@@ -70,13 +114,13 @@
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ]
@@ -88,13 +132,13 @@
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ]
@@ -110,13 +154,13 @@
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ]
@@ -128,13 +172,13 @@
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ]
@@ -146,13 +190,13 @@
       "runtimeAccess": {
         "variables": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/session"
           }
         ],
         "resources": [
           {
-            "scope": "app",
+            "scope": "actor",
             "path": "connections/tistory/default/profile"
           }
         ]

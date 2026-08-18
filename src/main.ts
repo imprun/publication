@@ -1,5 +1,6 @@
 import { defineAction, defineApp, type RuntimeAccess } from "@imprun/app-sdk";
 import {
+  connectionDisconnect,
   connectionLogin,
   connectionStatus,
   listCategories,
@@ -11,25 +12,56 @@ import {
 } from "./actions.js";
 
 const connectionAccess = {
-  variables: [{ scope: "app", path: "connections/tistory/default/session" }],
-  resources: [{ scope: "app", path: "connections/tistory/default/profile" }],
+  variables: [{ scope: "actor", path: "connections/tistory/default/session" }],
+  resources: [{ scope: "actor", path: "connections/tistory/default/profile" }],
 } as const satisfies RuntimeAccess;
 
 const loginAccess = {
   ...connectionAccess,
   variables: [
     ...connectionAccess.variables,
-    { scope: "app", path: "connections/tistory/default/account-id" },
-    { scope: "app", path: "connections/tistory/default/password" },
+    { scope: "actor", path: "connections/tistory/default/account-id" },
+    { scope: "actor", path: "connections/tistory/default/password" },
   ],
   writeVariables: [
     {
-      scope: "app",
+      scope: "actor",
       path: "connections/tistory/default/session",
       storage: "secret",
     },
+    {
+      scope: "actor",
+      path: "connections/tistory/default/account-id",
+      storage: "secret",
+    },
+    {
+      scope: "actor",
+      path: "connections/tistory/default/password",
+      storage: "secret",
+    },
   ],
-  writeResources: [{ scope: "app", path: "connections/tistory/default/profile" }],
+  writeResources: [{ scope: "actor", path: "connections/tistory/default/profile" }],
+} as const satisfies RuntimeAccess;
+
+const disconnectAccess = {
+  ...connectionAccess,
+  writeVariables: [
+    {
+      scope: "actor",
+      path: "connections/tistory/default/session",
+      storage: "secret",
+    },
+    {
+      scope: "actor",
+      path: "connections/tistory/default/account-id",
+      storage: "secret",
+    },
+    {
+      scope: "actor",
+      path: "connections/tistory/default/password",
+      storage: "secret",
+    },
+  ],
 } as const satisfies RuntimeAccess;
 
 export const app = defineApp({
@@ -41,10 +73,16 @@ export const app = defineApp({
       name: "connection.login",
       inputSchema: { path: "schemas/connection.login.input.schema.json" },
       outputSchema: { path: "schemas/connection.output.schema.json" },
-      operatorSettingsSchema: { path: "schemas/connection.login.settings.schema.json" },
       runsOn: ["browser"],
       runtimeAccess: loginAccess,
       handler: connectionLogin,
+    }),
+    defineAction({
+      name: "connection.disconnect",
+      inputSchema: { path: "schemas/connection.input.schema.json" },
+      outputSchema: { path: "schemas/connection.output.schema.json" },
+      runtimeAccess: disconnectAccess,
+      handler: connectionDisconnect,
     }),
     defineAction({
       name: "connection.status",

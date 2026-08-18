@@ -64,14 +64,14 @@ export async function loadTistoryConnection(
       capturedAt: z.string().datetime(),
       sessionSecretRef: z.unknown(),
     })
-    .parse(await ctx.resources.get(TISTORY_PROFILE_PATH, "app"));
+    .parse(await ctx.resources.get(TISTORY_PROFILE_PATH, "actor"));
   const connection = tistoryConnectionSchema.parse({
     ...resource,
     sessionSecretRef: TISTORY_SESSION_REFERENCE,
   });
   const rawSecret =
     resource.sessionSecretRef === TISTORY_SESSION_REFERENCE
-      ? await ctx.variables.get(TISTORY_SESSION_PATH, "app")
+      ? await ctx.variables.get(TISTORY_SESSION_PATH, "actor")
       : resource.sessionSecretRef;
   const parsedSecret = typeof rawSecret === "string" ? JSON.parse(rawSecret) : rawSecret;
   const session = tistorySessionSchema.parse(parsedSecret);

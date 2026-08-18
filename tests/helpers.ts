@@ -34,7 +34,7 @@ export function sampleConnection(): TistoryConnection {
     publicUrl: "https://example.tistory.com/",
     manageUrl: "https://example.tistory.com/manage",
     capturedAt: "2026-08-17T00:00:00.000Z",
-    sessionSecretRef: "$var@app:connections/tistory/default/session",
+    sessionSecretRef: "actor-variable:connections/tistory/default/session",
   };
 }
 

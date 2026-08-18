@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { WindforceContext } from "@imprun/app-sdk";
+import { TISTORY_ACCOUNT_ID_PATH, TISTORY_PASSWORD_PATH, TISTORY_SESSION_PATH } from "./config.js";
 import {
   connectionInputSchema,
   connectionLoginInputSchema,
@@ -16,24 +18,101 @@ import { loadTistoryConnection } from "./session.js";
 const provider = new TistoryProvider();
 
 export async function connectionLogin(ctx: WindforceContext) {
-  return loginToTistory(connectionLoginInputSchema.parse(ctx.input), ctx);
+  const input = connectionLoginInputSchema.parse(ctx.input);
+  const accountId = (await ctx.variables.get(TISTORY_ACCOUNT_ID_PATH, "actor")).trim();
+  const password = await ctx.variables.get(TISTORY_PASSWORD_PATH, "actor");
+  try {
+    const result = await loginToTistory({ ...input, accountId, password }, ctx);
+    await clearTistoryCredentials(ctx);
+    return result;
+  } catch (error) {
+    try {
+      await clearTistoryCredentials(ctx);
+    } catch {
+      ctx.logger.warn("Failed to clear temporary Tistory login credentials");
+    }
+    throw error;
+  }
+}
+
+async function clearTistoryCredentials(ctx: WindforceContext) {
+  for (const path of [TISTORY_ACCOUNT_ID_PATH, TISTORY_PASSWORD_PATH]) {
+    await ctx.variables.set(path, "", {
+      operationId: randomUUID(),
+      scope: "actor",
+    });
+  }
 }
 
 export async function connectionStatus(ctx: WindforceContext) {
   connectionInputSchema.parse(ctx.input);
-  const { connection, session } = await loadTistoryConnection(ctx);
-  const client = new TistoryClient(ctx.http.fetch.bind(ctx.http), connection, session);
-  await client.requestJson(
-    "/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all",
-  );
+  try {
+    const { connection, session } = await loadTistoryConnection(ctx);
+    const client = new TistoryClient(ctx.http.fetch.bind(ctx.http), connection, session);
+    try {
+      await client.requestJson(
+        "/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all",
+      );
+    } catch {
+      return {
+        provider: "tistory" as const,
+        connectionId: "default" as const,
+        blogHost: connection.blogHost,
+        publicUrl: connection.publicUrl,
+        capturedAt: connection.capturedAt,
+        checkedAt: new Date().toISOString(),
+        authenticated: false,
+        status: "expired" as const,
+      };
+    }
+    return {
+      provider: "tistory" as const,
+      connectionId: "default" as const,
+      blogHost: connection.blogHost,
+      publicUrl: connection.publicUrl,
+      capturedAt: connection.capturedAt,
+      checkedAt: new Date().toISOString(),
+      authenticated: true,
+      status: "ready" as const,
+    };
+  } catch {
+    return {
+      provider: "tistory" as const,
+      connectionId: "default" as const,
+      blogHost: "",
+      publicUrl: "https://www.tistory.com/",
+      checkedAt: new Date().toISOString(),
+      authenticated: false,
+      status: "missing" as const,
+    };
+  }
+}
+
+export async function connectionDisconnect(ctx: WindforceContext) {
+  connectionInputSchema.parse(ctx.input);
+  let blogHost = "";
+  let publicUrl = "https://www.tistory.com/";
+  try {
+    const { connection } = await loadTistoryConnection(ctx);
+    blogHost = connection.blogHost;
+    publicUrl = connection.publicUrl;
+  } catch {
+    // Disconnect remains idempotent when no usable session exists.
+  }
+  for (const path of [TISTORY_SESSION_PATH, TISTORY_ACCOUNT_ID_PATH, TISTORY_PASSWORD_PATH]) {
+    await ctx.variables.set(path, "", {
+      operationId: randomUUID(),
+      scope: "actor",
+    });
+  }
   return {
     provider: "tistory" as const,
     connectionId: "default" as const,
-    blogHost: connection.blogHost,
-    publicUrl: connection.publicUrl,
-    capturedAt: connection.capturedAt,
+    blogHost,
+    publicUrl,
     checkedAt: new Date().toISOString(),
-    authenticated: true as const,
+    authenticated: false,
+    status: "missing" as const,
   };
 }
 

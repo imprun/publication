@@ -20,8 +20,8 @@ describe("CloudPublicationClient", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         requests.push({ url: String(input), init });
-        if (requests.length <= 3) return jsonResponse({});
-        if (requests.length === 4) return jsonResponse({ run_id: "run-login", state: "succeeded" });
+        if (requests.length <= 2) return jsonResponse({});
+        if (requests.length === 3) return jsonResponse({ run_id: "run-login", state: "succeeded" });
         return jsonResponse({ blogHost: "example.tistory.com", authenticated: true });
       }),
     );
@@ -39,22 +39,56 @@ describe("CloudPublicationClient", () => {
 
     const firstVariable = JSON.parse(String(requests[0]?.init?.body)) as Record<string, unknown>;
     const secondVariable = JSON.parse(String(requests[1]?.init?.body)) as Record<string, unknown>;
-    const inputConfig = JSON.parse(String(requests[2]?.init?.body)) as {
-      config: Record<string, string>;
-      locked_keys: string[];
-    };
-    const loginRun = JSON.parse(String(requests[3]?.init?.body)) as {
+    const loginRun = JSON.parse(String(requests[2]?.init?.body)) as {
       input: Record<string, unknown>;
     };
 
-    expect(firstVariable).toMatchObject({ is_secret: true, app_key: "publication" });
-    expect(secondVariable).toMatchObject({ is_secret: true, app_key: "publication" });
-    expect(inputConfig.config.accountId).toMatch(/^\$var@app:/);
-    expect(inputConfig.config.password).toMatch(/^\$var@app:/);
-    expect(inputConfig.locked_keys).toEqual(["accountId", "password"]);
+    expect(firstVariable).toMatchObject({
+      is_secret: true,
+      app_key: "publication",
+      scope: "actor",
+    });
+    expect(secondVariable).toMatchObject({
+      is_secret: true,
+      app_key: "publication",
+      scope: "actor",
+    });
     expect(loginRun.input).toEqual({ blogHost: "example.tistory.com" });
     expect(JSON.stringify(loginRun)).not.toContain("account@example.com");
     expect(JSON.stringify(loginRun)).not.toContain("password-value");
+  });
+
+  it("reads and disconnects only through actor-scoped connection actions", async () => {
+    const actions: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as { action?: string })
+          : undefined;
+        if (body?.action) actions.push(body.action);
+        if (body?.action === "connection.status") {
+          return jsonResponse({ run_id: "run-status", state: "succeeded" });
+        }
+        if (body?.action === "connection.disconnect") {
+          return jsonResponse({ run_id: "run-disconnect", state: "succeeded" });
+        }
+        return jsonResponse({
+          blogHost: "example.tistory.com",
+          authenticated: actions.at(-1) === "connection.status",
+          status: actions.at(-1) === "connection.status" ? "ready" : "missing",
+        });
+      }),
+    );
+    const client = new CloudPublicationClient({
+      baseUrl: "https://tenant.cloud.imprun.dev",
+      workspace: "default",
+      accessToken: () => "identity-access-token",
+    });
+
+    await expect(client.connection()).resolves.toMatchObject({ status: "ready" });
+    await expect(client.disconnect()).resolves.toMatchObject({ status: "missing" });
+    expect(actions).toEqual(["connection.status", "connection.disconnect"]);
   });
 
   it("requires a HumanTask decision with an idempotency key before returning publish result", async () => {

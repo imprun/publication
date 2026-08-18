@@ -19,6 +19,7 @@ export interface PublicationClient {
     input: ConnectionCredentials,
     onProgress?: (progress: ConnectionProgress) => void,
   ): Promise<ConnectionSummary>;
+  disconnect(): Promise<ConnectionSummary>;
   requestPublish(
     input: PublishRequest,
     onProgress?: (progress: PublishProgress) => void,
@@ -84,6 +85,15 @@ export function createFixtureClient(): PublicationClient {
         label: "Tistory",
         blogHost: input.blogHost,
         status: "ready",
+      };
+    },
+    async disconnect() {
+      return {
+        provider: "tistory",
+        connectionId: "default",
+        label: "Tistory",
+        blogHost: "연결되지 않음",
+        status: "missing",
       };
     },
     async requestPublish() {

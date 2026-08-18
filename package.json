@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@imprun/app-sdk": "https://codeload.github.com/imprun/app-sdk/tar.gz/4657fb5408bacc617e93ca698c9d3a111de36e2a",
+    "@imprun/app-sdk": "https://codeload.github.com/imprun/app-sdk/tar.gz/73ac0070a30f0a60bcb6fffc717917a5116c2634",
     "marked": "16.0.0",
     "puppeteer-core": "25.7.0",
     "sanitize-html": "2.17.7",
