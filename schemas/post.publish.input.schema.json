@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "markdown", "draftHash", "visibility"],
+  "required": ["title", "content", "draftHash", "visibility"],
   "properties": {
     "provider": { "const": "tistory", "default": "tistory" },
     "connectionId": { "const": "default", "default": "default" },
     "title": { "type": "string", "minLength": 1, "maxLength": 250 },
-    "markdown": { "type": "string", "minLength": 1, "maxLength": 2000000 },
+    "content": { "$ref": "#/$defs/content" },
     "tags": {
       "type": "array",
       "maxItems": 30,
@@ -20,6 +20,15 @@
     "representativeImage": { "$ref": "#/$defs/media" }
   },
   "$defs": {
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "body"],
+      "properties": {
+        "format": { "enum": ["markdown", "html"] },
+        "body": { "type": "string", "minLength": 1, "maxLength": 2000000 }
+      }
+    },
     "media": {
       "type": "object",
       "additionalProperties": false,

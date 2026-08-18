@@ -131,7 +131,7 @@ async function clientFromContext(ctx: WindforceContext): Promise<TistoryClient> 
 function assertDraftHash(input: PostPublishInput | PostUpdateInput): void {
   const current = prepareDraft(input).draftHash;
   if (input.draftHash !== current) {
-    throw new Error("draftHash does not match the effective title, Markdown, tags, or category");
+    throw new Error("draftHash does not match the effective title, content, tags, or category");
   }
 }
 

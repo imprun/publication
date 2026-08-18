@@ -6,7 +6,7 @@ const draft: DraftFields = {
   provider: "tistory",
   connectionId: "default",
   title: " A title ",
-  markdown: "# Body",
+  content: { format: "markdown", body: "# Body" },
   tags: ["alpha", " alpha ", "beta"],
   categoryId: 7,
 };

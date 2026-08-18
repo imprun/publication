@@ -1,8 +1,9 @@
 # Publication
 
-Publication is a backend-first Windforce App that publishes Markdown to multiple
-platforms. The first provider is Tistory. A React UI will be added only after
-the backend contract is complete.
+Publication is a Windforce App and React service for publishing Markdown and
+HTML to multiple platforms. The first provider is Tistory. Imprun Identity
+authenticates users, Cloud authorizes workspace access, and every mutation is
+held for explicit approval.
 
 ## Backend flow
 
@@ -22,9 +23,9 @@ the backend contract is complete.
 4. `metadata.categories` retrieves the selectable Tistory category list by HTTP.
 5. `media.upload` uploads a representative image by HTTP and returns the signed
    Tistory attachment identity needed by the post.
-6. `post.prepare` validates and normalizes title, Markdown, tags, and category,
-   renders deterministic HTML, and returns a draft hash. It does not persist the
-   draft.
+6. `post.prepare` validates and normalizes title, source content, tags, and
+   category. Markdown is rendered to HTML; HTML is sanitized without Markdown
+   parsing. Both paths return deterministic hashes and do not persist the draft.
 7. `post.publish` or `post.update` verifies the draft hash, asks for HumanTask
    approval, then calls Tistory directly by HTTP. `post.delete` is also approval
    gated.
@@ -65,6 +66,30 @@ npm run check
 npm run build
 ```
 
+## Product UI
+
+The React product shell lives in `web` as an independent package so Windforce
+release preparation does not install browser dependencies. Local development is
+explicitly fixture-backed and never sends a live publish request:
+
+```text
+npm install --prefix web
+npm run check --prefix web
+npm run dev --prefix web
+```
+
+Production does not fall back to fixture data. Runtime `config.js` sets cloud
+mode and the public Imprun Identity client values; it never contains a customer
+tenant. After PKCE login, the customer selects an exact
+`https://*.cloud.imprun.dev` origin and workspace. The browser persists only
+those non-secret target values. Identity tokens use session storage, while
+Kakao credentials are cleared from React state after encrypted App Secret
+Variable provisioning.
+
+The production image is built from `web/Dockerfile`, serves on port 8080 as an
+unprivileged user, and accepts deployment-specific runtime configuration by
+mounting `/usr/share/nginx/html/config.js`.
+
 ## Tistory login E2E CLI
 
 The CLI provisions Kakao credentials as encrypted App-scoped Secret Variables,
@@ -86,7 +111,7 @@ directory:
 Then run:
 
 ```text
-npm run e2e:tistory-login -- --context junsik-cloud --blog-host pak2251.tistory.com --credentials C:\\private\\tistory-login.json
+npm run e2e:tistory-login -- --context my-cloud --blog-host example-blog.tistory.com --credentials C:\\private\\tistory-login.json
 ```
 
 The existing ignored `.env` format is also supported:
@@ -94,7 +119,7 @@ The existing ignored `.env` format is also supported:
 ```text
 KAKAO_LOGINID=your-kakao-account
 KAKAO_LOGINPWD=your-kakao-password
-npm run e2e:tistory-login -- --context junsik-cloud --blog-host pak2251.tistory.com --env .env
+npm run e2e:tistory-login -- --context my-cloud --blog-host example-blog.tistory.com --env .env
 ```
 
 Complete Kakao's own CAPTCHA in the Browser Edge tab if it appears. If Kakao then

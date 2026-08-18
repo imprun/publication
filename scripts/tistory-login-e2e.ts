@@ -27,7 +27,7 @@ export interface ExampleDraft {
   provider: "tistory";
   connectionId: "default";
   title: string;
-  markdown: string;
+  content: { format: "markdown"; body: string };
   tags: string[];
   categoryId: number;
 }
@@ -156,7 +156,7 @@ export function createExampleDraft(markdown: string, now = new Date()): ExampleD
     provider: "tistory",
     connectionId: "default",
     title: `[publication E2E] ${now.toISOString()}`,
-    markdown,
+    content: { format: "markdown", body: markdown },
     tags: ["publication-e2e", "markdown"],
     categoryId: 0,
   };

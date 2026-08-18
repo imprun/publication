@@ -8,7 +8,8 @@
     "title",
     "categoryId",
     "tags",
-    "markdownHash",
+    "sourceFormat",
+    "sourceHash",
     "renderedHtmlHash",
     "draftHash",
     "renderedHtml"
@@ -19,7 +20,8 @@
     "title": { "type": "string" },
     "categoryId": { "type": "integer", "minimum": 0 },
     "tags": { "type": "array", "items": { "type": "string" } },
-    "markdownHash": { "$ref": "#/$defs/hash" },
+    "sourceFormat": { "enum": ["markdown", "html"] },
+    "sourceHash": { "$ref": "#/$defs/hash" },
     "renderedHtmlHash": { "$ref": "#/$defs/hash" },
     "draftHash": { "$ref": "#/$defs/hash" },
     "renderedHtml": { "type": "string" }
