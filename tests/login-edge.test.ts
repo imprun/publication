@@ -24,6 +24,7 @@ type LoginOutcome =
   | "captcha-success"
   | "two-step-success"
   | "late-two-step-success"
+  | "oauth-confirmation"
   | "tistory-home"
   | "authentication-failure"
   | "runtime-unavailable"
@@ -41,6 +42,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
   const kakaoAuthenticate = vi.fn();
   const kakaoCaptchaRender = vi.fn();
   const kakaoVerificationPoll = vi.fn();
+  const kakaoOAuthApproval = vi.fn();
   const managementNavigations: string[] = [];
 
   const popupPage = {
@@ -92,6 +94,10 @@ function createBrowserHarness(outcome: LoginOutcome) {
           return "two-step-pending";
         }
         if (outcome === "captcha-success") return "captcha-required";
+        if (outcome === "oauth-confirmation") {
+          currentURL = "https://kauth.kakao.com/oauth/authorize";
+          return "navigating";
+        }
         authenticated = true;
         currentURL =
           outcome === "tistory-home"
@@ -115,6 +121,12 @@ function createBrowserHarness(outcome: LoginOutcome) {
           return "navigating";
         }
         return "two-step-pending";
+      }
+      if (source.includes("user_oauth_approval") && source.includes("requestSubmit")) {
+        kakaoOAuthApproval();
+        authenticated = true;
+        currentURL = "https://example.tistory.com/manage/newpost";
+        return true;
       }
       if (typeof argument === "string" && argument.includes("/manage/posts.json")) {
         return authenticated;
@@ -203,6 +215,7 @@ function createBrowserHarness(outcome: LoginOutcome) {
     kakaoAuthenticate,
     kakaoCaptchaRender,
     kakaoVerificationPoll,
+    kakaoOAuthApproval,
     humanWait,
     setVariable,
     setResource,
@@ -315,6 +328,18 @@ describe("Tistory Browser Edge login", () => {
     expect(harness.kakaoVerificationPoll).toHaveBeenCalledOnce();
     expect(harness.setVariable).toHaveBeenCalledOnce();
     expect(harness.setResource).toHaveBeenCalledOnce();
+    expectOwnedPagesCleaned(harness);
+  });
+
+  it("continues Tistory OAuth confirmation through page JavaScript", async () => {
+    const harness = createBrowserHarness("oauth-confirmation");
+
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(harness.kakaoOAuthApproval).toHaveBeenCalledOnce();
+    expect(harness.humanWait).not.toHaveBeenCalled();
     expectOwnedPagesCleaned(harness);
   });
 
