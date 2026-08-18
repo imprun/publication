@@ -46,8 +46,8 @@ describe("Tistory login E2E CLI contract", () => {
   });
 
   it("keeps credentials out of the persisted Run input", () => {
-    expect(loginRunInput("https://pak2251.tistory.com/manage")).toEqual({
-      blogHost: "pak2251.tistory.com",
+    expect(loginRunInput("https://example-blog.tistory.com/manage")).toEqual({
+      blogHost: "example-blog.tistory.com",
     });
   });
 
@@ -55,7 +55,7 @@ describe("Tistory login E2E CLI contract", () => {
     const draft = createExampleDraft("# fixture", new Date("2026-08-18T00:00:00.000Z"));
     expect(draft).toMatchObject({
       title: "[publication E2E] 2026-08-18T00:00:00.000Z",
-      markdown: "# fixture",
+      content: { format: "markdown", body: "# fixture" },
       categoryId: 0,
     });
     expect(privatePublishInput(draft, `sha256:${"a".repeat(64)}`)).toMatchObject({

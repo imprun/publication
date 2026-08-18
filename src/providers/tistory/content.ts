@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
+import type { ContentSource } from "../../contracts.js";
 
 const IMAGE_SUBSTITUTION_RE = /\[##_Image\|[\s\S]*?_##\]/g;
 
@@ -101,13 +102,16 @@ function placeholder(index: number): string {
   return `TISTORYIMAGEPLACEHOLDER${index}TISTORYIMAGEPLACEHOLDER`;
 }
 
-export function markdownToTistoryHtml(markdown: string): string {
+export function renderTistoryContent(content: ContentSource): string {
   const substitutions: string[] = [];
-  const protectedMarkdown = markdown.replace(IMAGE_SUBSTITUTION_RE, (value) => {
+  const protectedSource = content.body.replace(IMAGE_SUBSTITUTION_RE, (value) => {
     substitutions.push(value);
     return placeholder(substitutions.length - 1);
   });
-  const rendered = marked.parse(protectedMarkdown, { gfm: true, breaks: true }) as string;
+  const rendered =
+    content.format === "markdown"
+      ? (marked.parse(protectedSource, { gfm: true, breaks: true }) as string)
+      : protectedSource;
   let safe = sanitizeHtml(rendered, sanitizeOptions);
   substitutions.forEach((substitution, index) => {
     safe = safe.split(placeholder(index)).join(substitution);

@@ -5,7 +5,7 @@ const base = {
   provider: "tistory" as const,
   connectionId: "default" as const,
   title: "Title",
-  markdown: "**body**",
+  content: { format: "markdown" as const, body: "**body**" },
   tags: ["one", "two"],
   categoryId: 1,
 };
@@ -23,5 +23,13 @@ describe("prepareDraft", () => {
     expect(prepareDraft(base).draftHash).not.toBe(
       prepareDraft({ ...base, categoryId: 2 }).draftHash,
     );
+  });
+
+  it("changes the approval hash when the source format changes", () => {
+    const markdown = prepareDraft(base);
+    const html = prepareDraft({ ...base, content: { format: "html", body: "**body**" } });
+    expect(markdown.draftHash).not.toBe(html.draftHash);
+    expect(html.sourceFormat).toBe("html");
+    expect(html.renderedHtml).toBe("**body**");
   });
 });

@@ -18,10 +18,15 @@ export const connectionLoginInputSchema = z.object({
 
 export const connectionInputSchema = z.object(connectionFields);
 
+export const contentSourceSchema = z.object({
+  format: z.enum(["markdown", "html"]),
+  body: z.string().min(1).max(2_000_000),
+});
+
 export const draftFieldsSchema = z.object({
   ...connectionFields,
   title: z.string().trim().min(1).max(250),
-  markdown: z.string().min(1).max(2_000_000),
+  content: contentSourceSchema,
   tags: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
   categoryId: z.number().int().nonnegative().default(0),
 });
@@ -65,6 +70,7 @@ export const postDeleteInputSchema = z.object({
 
 export type ConnectionLoginInput = z.infer<typeof connectionLoginInputSchema>;
 export type ConnectionInput = z.infer<typeof connectionInputSchema>;
+export type ContentSource = z.infer<typeof contentSourceSchema>;
 export type DraftFields = z.infer<typeof draftFieldsSchema>;
 export type MediaUploadInput = z.infer<typeof mediaUploadInputSchema>;
 export type UploadedMedia = z.infer<typeof uploadedMediaSchema>;

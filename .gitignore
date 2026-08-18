@@ -4,7 +4,9 @@ coverage/
 .env
 .env.*
 !.env.example
+!web/.env.development
 .secrets/
 playwright-report/
 test-results/
+*.tsbuildinfo
 .serena/cache/

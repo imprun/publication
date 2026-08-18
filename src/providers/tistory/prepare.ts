@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DraftFields } from "../../contracts.js";
 import type { PreparedDraft } from "../provider.js";
-import { markdownToTistoryHtml } from "./markdown.js";
+import { renderTistoryContent } from "./content.js";
 import { normalizeTags } from "./payload.js";
 
 function sha256(value: string): string {
@@ -11,12 +11,12 @@ function sha256(value: string): string {
 export function prepareDraft(input: DraftFields): PreparedDraft {
   const title = input.title.trim();
   const tags = normalizeTags(input.tags);
-  const renderedHtml = markdownToTistoryHtml(input.markdown);
+  const renderedHtml = renderTistoryContent(input.content);
   const canonical = JSON.stringify({
     provider: input.provider,
     connectionId: input.connectionId,
     title,
-    markdown: input.markdown,
+    content: input.content,
     tags,
     categoryId: input.categoryId,
   });
@@ -26,7 +26,8 @@ export function prepareDraft(input: DraftFields): PreparedDraft {
     title,
     categoryId: input.categoryId,
     tags,
-    markdownHash: sha256(input.markdown),
+    sourceFormat: input.content.format,
+    sourceHash: sha256(input.content.body),
     renderedHtmlHash: sha256(renderedHtml),
     draftHash: sha256(canonical),
     renderedHtml,

@@ -1,7 +1,7 @@
 # Publication repository policy
 
-This repository owns a backend-first Windforce App for publishing Markdown to
-multiple platforms. Tistory is the first provider.
+This repository owns a backend-first Windforce App and product UI for publishing
+Markdown and HTML to multiple platforms. Tistory is the first provider.
 
 - Keep provider-neutral actions and domain types separate from Tistory's
   undocumented admin HTTP adapter.
@@ -15,7 +15,7 @@ multiple platforms. Tistory is the first provider.
 - Do not persist post drafts in Windforce runtime configuration. Draft inputs
   stay stateless until a dedicated content store is deliberately introduced.
 - Public publishing and destructive post operations require HumanTask approval.
-- The React UI is a later phase. Do not add UI code until the backend contract is
-  complete and explicitly approved.
+- Keep the React product UI in the independent `web` package. Fixture mode must
+  be explicit and must never simulate a completed live mutation in production.
 - Treat Tistory admin endpoints as a versioned, tested adapter contract because
   they are private and may change without notice.

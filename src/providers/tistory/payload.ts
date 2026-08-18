@@ -1,5 +1,5 @@
 import type { DraftFields, UploadedMedia } from "../../contracts.js";
-import { markdownToTistoryHtml } from "./markdown.js";
+import { renderTistoryContent } from "./content.js";
 
 export type TistoryVisibility = 0 | 20;
 
@@ -30,7 +30,7 @@ export function buildTistoryPostBody(
   representativeImage?: UploadedMedia,
   postId = "0",
 ): TistoryPostBody {
-  const bodyHtml = markdownToTistoryHtml(draft.markdown);
+  const bodyHtml = renderTistoryContent(draft.content);
   const content = representativeImage
     ? `${representativeImage.substitution}\n${bodyHtml}`
     : bodyHtml;

@@ -12,8 +12,9 @@ Status: current implementation snapshot, not a final architecture decision
 - The workspace operator owns registration of `publication.connection@1`.
 - Tistory owns the undocumented `/manage/*` HTTP behavior. The adapter must fail
   closed when authentication or response shape changes.
-- A future React UI consumes action schemas and outputs. It does not own session
-  credentials or Tistory HTTP behavior.
+- The React SPA consumes the Cloud Action APIs and action outputs. It does not
+  own session credentials or Tistory HTTP behavior. Identity authenticates the
+  human; Cloud authorizes tenant and workspace access.
 
 ## Windforce SDK boundary
 
@@ -41,8 +42,11 @@ the Linux execution bundle for browser Workers.
 ## Security model
 
 ```text
-Kakao credentials (write-only action input)
+Kakao credentials (ephemeral browser form state)
              |
+             v
+App Secret Variables: account-id + password
+             | locked $var@app InputConfig
              v
 isolated BrowserContext bootstrap
              |
@@ -61,7 +65,9 @@ plaintext. The raw Secret Variable contains user agent, cookies, local storage,
 and session storage. Every action declares the exact App-owned Resource and
 Secret Variable paths it can read. Only `connection.login` can write them.
 
-The supplied login HAR defines the current Kakao adapter state machine:
+The browser clears credential form state as soon as Cloud accepts the encrypted
+Secret Variable writes. Credentials never become Run input, logs, Resources, or
+receipts. The supplied login HAR defines the current Kakao adapter state machine:
 `authenticate.json`, `verify_tms_for_login.json`, OAuth continuation, then the
 Tistory callback. Browser isolation supplies the origin security model, current
 CSRF/encryption/user-agent context, and the cookie/storage jar. The adapter uses
@@ -78,15 +84,17 @@ exact-path based rather than wildcard based.
 
 ## Publishing model
 
-`post.prepare` is a stateless compiler step, not a database write. It returns a
-canonical draft hash over provider, connection, title, Markdown, normalized
-tags, and category. Publish and update recompute this hash before presenting an
-approval task, preventing stale UI state from silently changing the approved
-content.
+`post.prepare` is a stateless compiler step, not a database write. It accepts a
+provider-neutral `content` value with `format: markdown | html` and a source
+`body`. It returns a canonical draft hash over provider, connection, title,
+content format and source, normalized tags, and category. Publish and update
+recompute this hash before presenting an approval task, preventing stale UI
+state from silently changing the approved content.
 
 The Tistory server stores rendered HTML through its current management endpoint;
 it does not render raw Markdown submitted to `/manage/post.json`. Markdown is
-therefore converted and sanitized inside the Tistory adapter. This is a provider
+therefore rendered and sanitized inside the Tistory adapter. HTML input skips
+Markdown rendering but passes through the same sanitizer. This is a provider
 detail, not the provider-neutral content model.
 
 The representative image is uploaded first through
@@ -113,8 +121,9 @@ new post even when an ID is supplied. Redirects, login HTML returned with status
 ## Deferred decisions
 
 - additional providers and multiple simultaneous accounts;
+- authenticated-principal ownership for connection Secrets and Resources;
 - durable draft/version storage;
 - scheduled publishing and protected posts;
 - recovery or rotation UI for expired sessions;
-- React framework, component system, and deployment shape;
+- self-service tenant provisioning and automatic App installation;
 - release qualification of non-empty Tistory `thumbnail` behavior.

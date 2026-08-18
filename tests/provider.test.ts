@@ -8,7 +8,7 @@ const draft = {
   provider: "tistory" as const,
   connectionId: "default" as const,
   title: "Test post",
-  markdown: "# Body",
+  content: { format: "markdown" as const, body: "# Body" },
   tags: ["test"],
   categoryId: 0,
 };

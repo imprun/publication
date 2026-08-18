@@ -13,7 +13,8 @@ export interface PreparedDraft {
   title: string;
   categoryId: number;
   tags: string[];
-  markdownHash: string;
+  sourceFormat: "markdown" | "html";
+  sourceHash: string;
   renderedHtmlHash: string;
   draftHash: string;
   renderedHtml: string;
