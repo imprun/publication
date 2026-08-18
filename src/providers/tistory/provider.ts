@@ -182,10 +182,10 @@ function assertApproved(outcome: "submit" | "cancel", value?: ApprovalValue): vo
 
 export function validateEntryUrl(host: string, rawEntryUrl: string) {
   const url = new URL(rawEntryUrl, `https://${host}`);
-  if (url.protocol !== "https:" || url.hostname !== host) {
-    throw new Error("Tistory returned an entry URL outside the connected blog");
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Tistory returned an invalid post URL");
   }
   const postId = url.pathname.replace(/^\/+|\/+$/g, "");
   if (!/^\d+$/.test(postId)) throw new Error("Tistory returned an invalid post URL");
-  return { entryUrl: url.toString(), postId };
+  return { entryUrl: new URL(`/${postId}`, `https://${host}`).toString(), postId };
 }

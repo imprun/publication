@@ -32,6 +32,7 @@ const KAKAO_ACCOUNT_JAVASCRIPT_READY_TIMEOUT_MS = 20_000;
 const KAKAO_LOGIN_STATE_KEY = "publication.tistory.kakao-login";
 const KAKAO_ROOT_MODULE_KEY = "publication.tistory.kakao-root-module";
 const KAKAO_CAPTCHA_MAX_ATTEMPTS = 3;
+const KAKAO_AUTHORIZATION_HOST = "kauth.kakao.com";
 const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
@@ -717,9 +718,18 @@ async function waitForAuthenticatedSession(
 ): Promise<void> {
   const managementURL = `${origin}/manage/posts/`;
   const apiURL = `${origin}/manage/posts.json?category=-3&page=1&searchKeyword=&searchType=title&visibility=all`;
+  let oauthApprovalSubmitted = false;
 
   while (Date.now() < deadline) {
     const currentURL = parsePageURL(page.url());
+    if (
+      currentURL?.hostname === KAKAO_AUTHORIZATION_HOST &&
+      currentURL.pathname === "/oauth/authorize" &&
+      !oauthApprovalSubmitted
+    ) {
+      oauthApprovalSubmitted = await submitKakaoOAuthApproval(page);
+      if (oauthApprovalSubmitted) continue;
+    }
     if (currentURL && isPostAuthenticationTistoryURL(currentURL, host)) {
       if (currentURL.origin !== origin || !currentURL.pathname.startsWith("/manage")) {
         const remaining = deadline - Date.now();
@@ -737,6 +747,25 @@ async function waitForAuthenticatedSession(
   throw new Error(
     `Tistory management session was not established before the login deadline at ${safePageLocation(page.url())}`,
   );
+}
+
+async function submitKakaoOAuthApproval(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      const approval = document.querySelector('[name="user_oauth_approval"]');
+      if (!(approval instanceof HTMLButtonElement) && !(approval instanceof HTMLInputElement)) {
+        return false;
+      }
+      const form = approval.form;
+      if (!form) return false;
+      const isSubmitter =
+        approval instanceof HTMLButtonElement ||
+        approval.type === "submit" ||
+        approval.type === "image";
+      form.requestSubmit(isSubmitter ? approval : undefined);
+      return true;
+    })
+    .catch(() => false);
 }
 
 async function isAuthenticatedManagementSession(

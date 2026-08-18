@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { prepareDraft } from "../src/providers/tistory/prepare.js";
-import { TistoryProvider } from "../src/providers/tistory/provider.js";
+import { TistoryProvider, validateEntryUrl } from "../src/providers/tistory/provider.js";
 import { mockContext } from "./helpers.js";
 
 const provider = new TistoryProvider();
@@ -14,6 +14,19 @@ const draft = {
 };
 
 describe("TistoryProvider publishing", () => {
+  it("canonicalizes a numeric custom-domain response onto the connected Tistory host", () => {
+    expect(validateEntryUrl("example.tistory.com", "https://blog.example.test/187")).toEqual({
+      postId: "187",
+      entryUrl: "https://example.tistory.com/187",
+    });
+  });
+
+  it("rejects a non-numeric Tistory response path", () => {
+    expect(() =>
+      validateEntryUrl("example.tistory.com", "https://blog.example.test/entry/not-an-id"),
+    ).toThrow("Tistory returned an invalid post URL");
+  });
+
   it("rejects stale draft state before approval or HTTP", async () => {
     const fetcher = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) => new Response("{}"),

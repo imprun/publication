@@ -78,7 +78,7 @@ describe("Windforce manifest", () => {
     }
   });
 
-  it("uses Kakao page JavaScript without inspecting login controls", () => {
+  it("uses Kakao page JavaScript without inspecting account login controls", () => {
     const loginSource = readFileSync(join(root, "src", "providers", "tistory", "login.ts"), "utf8");
     expect(loginSource).toContain("authorize.call(auth");
     expect(loginSource).toContain('client.call("authenticate"');
@@ -87,13 +87,14 @@ describe("Windforce manifest", () => {
     expect(loginSource).toContain("character.charCodeAt(0).toString(16)");
     expect(loginSource).toContain("mo: userAgentData?.mobile ? 1 : 0");
     expect(loginSource).toContain("kakaoAuthState");
+    expect(loginSource).toContain("user_oauth_approval");
+    expect(loginSource).toContain("form.requestSubmit");
     for (const forbidden of [
       "waitForSelector",
       "locator(",
       "button[type=",
       "input[name=",
       "waitForNavigation",
-      "requestSubmit",
       "dispatchEvent",
     ]) {
       expect(loginSource).not.toContain(forbidden);
