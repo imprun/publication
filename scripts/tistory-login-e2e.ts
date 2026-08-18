@@ -3,12 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  TISTORY_ACCOUNT_ID_PATH,
-  TISTORY_ACCOUNT_ID_REFERENCE,
-  TISTORY_PASSWORD_PATH,
-  TISTORY_PASSWORD_REFERENCE,
-} from "../src/config.js";
+import { TISTORY_ACCOUNT_ID_PATH, TISTORY_PASSWORD_PATH } from "../src/config.js";
 import { normalizeTistoryHost } from "../src/providers/tistory/host.js";
 
 const APP_KEY = "publication";
@@ -123,6 +118,7 @@ export function credentialVariableRequests(credentials: LoginCredentials) {
       value: credentials.accountId,
       is_secret: true,
       app_key: APP_KEY,
+      scope: "actor",
       description: "Kakao account identifier for Tistory login",
     },
     {
@@ -130,20 +126,10 @@ export function credentialVariableRequests(credentials: LoginCredentials) {
       value: credentials.password,
       is_secret: true,
       app_key: APP_KEY,
+      scope: "actor",
       description: "Kakao account password for Tistory login",
     },
   ];
-}
-
-export function loginInputConfigRequest() {
-  return {
-    action_key: LOGIN_ACTION,
-    config: {
-      accountId: TISTORY_ACCOUNT_ID_REFERENCE,
-      password: TISTORY_PASSWORD_REFERENCE,
-    },
-    locked_keys: ["accountId", "password"],
-  };
 }
 
 export function loginRunInput(blogHost: string) {
@@ -254,11 +240,6 @@ async function provisionCredentials(context: string, credentials: LoginCredentia
       true,
     );
   }
-  await imprunJson(
-    context,
-    ["api", `apps/${APP_KEY}/input-configs`, "--method", "PUT", "--input", "-"],
-    loginInputConfigRequest(),
-  );
 }
 
 async function createRun(context: string, action: string, input: unknown): Promise<RunView> {
@@ -356,8 +337,8 @@ async function main() {
   await provisionCredentials(options.context, credentials);
   credentials.accountId = "";
   credentials.password = "";
-  console.log("Kakao credentials were stored as App-scoped Secret Variables.");
-  console.log("The InputConfig contains only $var references; Run input contains only blogHost.");
+  console.log("Kakao credentials were stored as actor-scoped Secret Variables.");
+  console.log("Run input contains only blogHost.");
   if (options.configureOnly) return;
 
   const markdown = await readFile(options.markdownPath, "utf8");

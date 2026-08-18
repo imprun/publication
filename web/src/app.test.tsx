@@ -35,6 +35,15 @@ const client: PublicationClient = {
       status: "ready",
     };
   },
+  async disconnect() {
+    return {
+      provider: "tistory",
+      connectionId: "default",
+      label: "Tistory",
+      blogHost: "연결되지 않음",
+      status: "missing",
+    };
+  },
   async requestPublish() {
     throw new Error("Fixture test client does not publish");
   },
@@ -47,14 +56,28 @@ const client: PublicationClient = {
 describe("Publication studio", () => {
   it("keeps review disabled until a source and title exist", async () => {
     render(<App client={client} fixtureMode />);
-    expect(await screen.findByText("test.tistory.com")).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /test\.tistory\.com/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "게시 검토" })).toBeDisabled();
+  });
+
+  it("manages Kakao credentials only from the Connection menu", async () => {
+    const user = userEvent.setup();
+    render(<App client={client} fixtureMode />);
+    await screen.findByRole("option", { name: /test\.tistory\.com/ });
+    expect(screen.queryByLabelText("카카오계정")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("게시할 Tistory 연결")).toHaveValue("default");
+
+    await user.click(screen.getByRole("button", { name: "연결" }));
+    expect(screen.getByRole("heading", { name: "Tistory" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "다시 연결" }));
+    expect(screen.getByLabelText("카카오계정")).toBeInTheDocument();
+    expect(screen.getByLabelText("비밀번호")).toBeInTheDocument();
   });
 
   it("prepares Markdown and shows the immutable approval hash", async () => {
     const user = userEvent.setup();
     render(<App client={client} fixtureMode />);
-    await screen.findByText("test.tistory.com");
+    await screen.findByRole("option", { name: /test\.tistory\.com/ });
     await user.type(screen.getByPlaceholderText("게시물 제목"), "첫 게시");
     await user.type(screen.getByLabelText(/원문 내용/), "# 본문");
     await user.click(screen.getByRole("button", { name: "게시 검토" }));

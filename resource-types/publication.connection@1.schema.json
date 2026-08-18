@@ -26,7 +26,7 @@
     "manageUrl": { "type": "string", "format": "uri" },
     "capturedAt": { "type": "string", "format": "date-time" },
     "sessionSecretRef": {
-      "const": "$var@app:connections/tistory/default/session"
+      "const": "actor-variable:connections/tistory/default/session"
     }
   }
 }

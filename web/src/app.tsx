@@ -24,10 +24,8 @@ interface AppProps {
 }
 
 const navigation = [
-  { label: "새 게시", icon: "document" as const, active: true },
-  { label: "연결", icon: "link" as const, active: false },
-  { label: "게시 기록", icon: "history" as const, active: false },
-  { label: "설정", icon: "settings" as const, active: false },
+  { id: "compose" as const, label: "새 게시", icon: "document" as const },
+  { id: "connections" as const, label: "연결", icon: "link" as const },
 ];
 
 function fileTitle(filename: string): string {
@@ -81,6 +79,7 @@ export function App({
   onSignOut,
   onChangeCloudTarget,
 }: AppProps) {
+  const [activeView, setActiveView] = useState<(typeof navigation)[number]["id"]>("compose");
   const sourceInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [connection, setConnection] = useState<ConnectionSummary | null>(null);
@@ -91,6 +90,9 @@ export function App({
   const [accountId, setAccountId] = useState("");
   const [password, setPassword] = useState("");
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [showConnectionForm, setShowConnectionForm] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [connectionProgress, setConnectionProgress] = useState<ConnectionProgress | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sourceFormat, setSourceFormat] = useState<ContentFormat>("markdown");
@@ -167,6 +169,8 @@ export function App({
         setConnectionProgress,
       );
       setConnection(nextConnection);
+      setShowConnectionForm(false);
+      setConfirmDisconnect(false);
       setBlogHost(nextConnection.blogHost);
       const nextCategories = await client.categories();
       setCategories(nextCategories);
@@ -180,6 +184,26 @@ export function App({
       setPassword("");
       setConnectionProgress(null);
       setConnecting(false);
+    }
+  }
+
+  async function disconnect() {
+    if (disconnecting || connecting) return;
+    setDisconnecting(true);
+    setConnectionError(null);
+    try {
+      setConnection(await client.disconnect());
+      setCategories([]);
+      setCategoryId(0);
+      setBlogHost("");
+      setConfirmDisconnect(false);
+      setShowConnectionForm(true);
+    } catch (error: unknown) {
+      setConnectionError(
+        error instanceof Error ? error.message : "Tistory 연결을 해제하지 못했습니다.",
+      );
+    } finally {
+      setDisconnecting(false);
     }
   }
 
@@ -308,7 +332,9 @@ export function App({
             <button
               key={item.label}
               type="button"
-              className={`nav-item${item.active ? " active" : ""}`}
+              className={`nav-item${activeView === item.id ? " active" : ""}`}
+              aria-current={activeView === item.id ? "page" : undefined}
+              onClick={() => setActiveView(item.id)}
             >
               <Icon name={item.icon} aria-hidden="true" />
               <span>{item.label}</span>
@@ -354,430 +380,572 @@ export function App({
         </header>
 
         <main id="main-content" className="main-content" tabIndex={-1}>
-          <header className="page-header">
-            <div>
-              <span className="eyebrow">새 게시</span>
-              <h1>문서를 게시합니다.</h1>
-              <p>원문을 선택하고 게시 옵션을 확인한 뒤, 승인 요청을 만드세요.</p>
-            </div>
-            <nav className="step-summary" aria-label="게시 단계">
-              <span className="done">1</span>
-              <small>문서</small>
-              <i />
-              <span className={prepared ? "done" : "current"}>2</span>
-              <small>검토</small>
-              <i />
-              <span>3</span>
-              <small>승인</small>
-            </nav>
-          </header>
-
-          {loadError ? (
-            <div className="notice error" role="alert">
-              {loadError}
-            </div>
-          ) : null}
-          {fixtureMode ? (
-            <div className="notice fixture" role="status">
-              Fixture에서는 화면과 검토 상태만 확인하며 실제 게시 요청은 보내지 않습니다.
-            </div>
-          ) : null}
-
-          {!loading && !ready && !fixtureMode ? (
-            <section className="panel connection-setup" aria-labelledby="connection-title">
-              <div className="section-heading">
+          {activeView === "connections" ? (
+            <>
+              <header className="page-header">
                 <div>
-                  <span className="section-number">00</span>
-                  <h2 id="connection-title">Tistory 연결</h2>
+                  <span className="eyebrow">연결</span>
+                  <h1>게시 플랫폼을 연결합니다.</h1>
+                  <p>로그인한 Imprun 계정에 연결된 플랫폼과 세션 상태를 관리하세요.</p>
                 </div>
-                <span className="connection-badge">
-                  {connection?.status === "expired" ? "다시 연결" : "연결 필요"}
-                </span>
-              </div>
-              <p>
-                카카오 계정은 암호화된 App Secret Variable에만 저장됩니다. Publication 화면, 실행
-                기록, 게시 결과에는 남지 않습니다.
-              </p>
-              <form className="connection-form" onSubmit={connect}>
-                <label className="field">
-                  <span>
-                    <strong>블로그 주소</strong>
-                  </span>
-                  <input
-                    value={blogHost}
-                    disabled={connecting}
-                    onChange={(event) => setBlogHost(event.target.value)}
-                    placeholder="example.tistory.com"
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                  />
-                </label>
-                <label className="field">
-                  <span>
-                    <strong>카카오계정</strong>
-                  </span>
-                  <input
-                    value={accountId}
-                    disabled={connecting}
-                    onChange={(event) => setAccountId(event.target.value)}
-                    type="email"
-                    autoComplete="username"
-                    placeholder="카카오계정 이메일"
-                  />
-                </label>
-                <label className="field">
-                  <span>
-                    <strong>비밀번호</strong>
-                  </span>
-                  <input
-                    value={password}
-                    disabled={connecting}
-                    onChange={(event) => setPassword(event.target.value)}
-                    type="password"
-                    autoComplete="current-password"
-                    placeholder="카카오계정 비밀번호"
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className="primary-action"
-                  disabled={connecting || !blogHost.trim() || !accountId.trim() || !password}
-                >
-                  {connecting ? "연결 중…" : "카카오로 Tistory 연결"}
-                </button>
-              </form>
-              {connectionProgress ? (
-                <div className="notice fixture" role="status">
-                  {connectionProgressLabels[connectionProgress]}
-                </div>
-              ) : null}
-              {connectionError ? (
+              </header>
+
+              {loadError ? (
                 <div className="notice error" role="alert">
-                  {connectionError}
+                  {loadError}
                 </div>
               ) : null}
-            </section>
-          ) : null}
 
-          <form className="studio-grid" onSubmit={prepare}>
-            <div className="editor-column">
-              <section className="panel source-panel">
-                <div className="section-heading">
+              <section
+                className="panel connections-panel"
+                aria-labelledby="tistory-connection-title"
+              >
+                <div className="connection-overview">
+                  <div className="platform-mark">T</div>
                   <div>
-                    <span className="section-number">01</span>
-                    <h2>원문</h2>
+                    <span>게시 플랫폼</span>
+                    <h2 id="tistory-connection-title">Tistory</h2>
+                    <p>
+                      {loading
+                        ? "연결 상태를 확인하고 있습니다."
+                        : ready
+                          ? `${connection.blogHost} 블로그에 연결되어 있습니다.`
+                          : connection?.status === "expired"
+                            ? "저장된 세션이 만료되었습니다. 다시 연결해 주세요."
+                            : "아직 연결된 Tistory 계정이 없습니다."}
+                    </p>
                   </div>
-                  <fieldset className="format-switch">
-                    <legend className="sr-only">원문 형식</legend>
-                    {(["markdown", "html"] as const).map((format) => (
-                      <button
-                        key={format}
-                        type="button"
-                        className={sourceFormat === format ? "active" : ""}
-                        aria-pressed={sourceFormat === format}
-                        disabled={workflowLocked}
-                        onClick={() => {
-                          setSourceFormat(format);
-                          invalidatePrepared();
-                        }}
-                      >
-                        {format === "markdown" ? "Markdown" : "HTML"}
-                      </button>
-                    ))}
-                  </fieldset>
+                  <span className={`connection-badge ${ready ? "ready" : ""}`}>
+                    {loading
+                      ? "확인 중"
+                      : ready
+                        ? "연결됨"
+                        : connection?.status === "expired"
+                          ? "만료됨"
+                          : "연결 안 됨"}
+                  </span>
                 </div>
 
-                <label className="drop-zone">
-                  <input
-                    ref={fileInputRef}
-                    className="sr-only"
-                    type="file"
-                    disabled={workflowLocked}
-                    accept=".md,.markdown,.html,.htm,text/markdown,text/html"
-                    onChange={(event) => void chooseSource(event.target.files?.[0] ?? null)}
-                  />
-                  <span className="drop-icon">
-                    <Icon name={sourceName ? "check" : "upload"} aria-hidden="true" />
-                  </span>
-                  <span>
-                    <strong>{sourceName ?? "MD 또는 HTML 파일 선택"}</strong>
-                    <small>
-                      {sourceName ? "파일을 다시 선택할 수 있습니다." : "최대 2MB · 로컬 파일"}
-                    </small>
-                  </span>
-                </label>
-                {sourceError ? (
-                  <p className="field-error" role="alert">
-                    {sourceError}
-                  </p>
-                ) : null}
-
-                <label className="field source-field" htmlFor={sourceInputId}>
-                  <span>
-                    <strong>원문 내용</strong>
-                    <small>파일 대신 직접 붙여넣을 수도 있습니다.</small>
-                  </span>
-                  <textarea
-                    id={sourceInputId}
-                    value={sourceBody}
-                    disabled={workflowLocked}
-                    onChange={changeSource}
-                    spellCheck={false}
-                    placeholder={
-                      sourceFormat === "markdown"
-                        ? "# 제목\n\n게시할 Markdown을 입력하세요."
-                        : "<h1>제목</h1>\n<p>게시할 HTML을 입력하세요.</p>"
-                    }
-                  />
-                </label>
-              </section>
-
-              <section className="panel options-panel">
-                <div className="section-heading">
-                  <div>
-                    <span className="section-number">02</span>
-                    <h2>게시 정보</h2>
-                  </div>
-                </div>
-                <div className="form-grid">
-                  <label className="field wide">
-                    <span>
-                      <strong>제목</strong>
-                    </span>
-                    <input
-                      value={title}
-                      disabled={workflowLocked}
-                      maxLength={250}
-                      onChange={(event) => {
-                        setTitle(event.target.value);
-                        invalidatePrepared();
-                      }}
-                      placeholder="게시물 제목"
-                    />
-                  </label>
-                  <label className="field">
-                    <span>
-                      <strong>카테고리</strong>
-                    </span>
-                    <select
-                      value={categoryId}
-                      disabled={workflowLocked}
-                      onChange={(event) => {
-                        setCategoryId(Number(event.target.value));
-                        invalidatePrepared();
-                      }}
+                {ready && !showConnectionForm ? (
+                  <div className="connection-actions">
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={() => setShowConnectionForm(true)}
                     >
-                      {categories.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>
-                      <strong>태그</strong>
-                      <small>쉼표로 구분</small>
-                    </span>
-                    <input
-                      value={tags}
-                      disabled={workflowLocked}
-                      onChange={(event) => {
-                        setTags(event.target.value);
-                        invalidatePrepared();
-                      }}
-                      placeholder="개발, 기록"
-                    />
-                  </label>
-                  <fieldset className="field wide visibility-field">
-                    <legend>
-                      <strong>공개 범위</strong>
-                    </legend>
-                    <div className="visibility-options">
-                      {(["private", "public"] as const).map((value) => (
-                        <label key={value} className={visibility === value ? "selected" : ""}>
-                          <input
-                            type="radio"
-                            name="visibility"
-                            value={value}
-                            checked={visibility === value}
-                            disabled={workflowLocked}
-                            onChange={() => setVisibility(value)}
-                          />
-                          <span>
-                            <strong>{value === "private" ? "비공개" : "공개"}</strong>
-                            <small>
-                              {value === "private"
-                                ? "나만 확인할 수 있습니다."
-                                : "승인 즉시 독자에게 공개됩니다."}
-                            </small>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <label className="field wide">
-                    <span>
-                      <strong>대표 이미지</strong>
-                      <small>선택</small>
-                    </span>
-                    <span className="file-control">
-                      <input
-                        className="sr-only"
-                        type="file"
-                        disabled={workflowLocked}
-                        accept="image/png,image/jpeg,image/gif,image/webp"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0] ?? null;
-                          setCoverFile(file);
-                          setCoverName(file?.name ?? null);
-                        }}
-                      />
-                      <span>{coverName ?? "PNG, JPG, GIF, WebP"}</span>
-                      <b>{coverName ? "변경" : "선택"}</b>
-                    </span>
-                  </label>
-                </div>
-              </section>
-            </div>
-
-            <aside className="review-column">
-              <section className="panel connection-card">
-                <div className="platform-mark">T</div>
-                <div>
-                  <span>Tistory</span>
-                  <strong>{connection?.blogHost ?? "연결 확인 중"}</strong>
-                </div>
-                <span className={`connection-badge ${ready ? "ready" : ""}`}>
-                  {ready ? "준비됨" : "연결 필요"}
-                </span>
-              </section>
-
-              <section className="panel review-card">
-                <div className="section-heading">
-                  <div>
-                    <span className="section-number">03</span>
-                    <h2>게시 검토</h2>
-                  </div>
-                </div>
-                {prepared ? (
-                  <div className="prepared-view">
-                    <div className="preview-frame">
-                      <iframe
-                        title="정화된 게시 미리보기"
-                        sandbox=""
-                        srcDoc={previewDocument(prepared.renderedHtml)}
-                      />
-                    </div>
-                    <dl className="review-list">
-                      <div>
-                        <dt>형식</dt>
-                        <dd>{prepared.content.format === "markdown" ? "Markdown" : "HTML"}</dd>
-                      </div>
-                      <div>
-                        <dt>공개</dt>
-                        <dd>{visibility === "private" ? "비공개" : "공개"}</dd>
-                      </div>
-                      <div>
-                        <dt>태그</dt>
-                        <dd>{prepared.tags.length || "없음"}</dd>
-                      </div>
-                      <div>
-                        <dt>대표 이미지</dt>
-                        <dd>{coverName ?? "없음"}</dd>
-                      </div>
-                    </dl>
-                    <div className="hash-row">
-                      <span>승인 기준</span>
-                      <code>{prepared.draftHash.slice(0, 20)}…</code>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="empty-review">
-                    <span className="empty-mark">P</span>
-                    <strong>아직 검토할 문서가 없습니다.</strong>
-                    <p>원문과 제목을 입력한 뒤 게시 검토를 준비하세요.</p>
-                  </div>
-                )}
-                {prepareError ? (
-                  <div className="notice error" role="alert">
-                    {prepareError}
+                      다시 연결
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => setConfirmDisconnect(true)}
+                    >
+                      연결 해제
+                    </button>
                   </div>
                 ) : null}
-                <button
-                  type="submit"
-                  className="primary-action"
-                  disabled={!canPrepare || workflowLocked}
-                >
-                  {preparing ? "검토 준비 중…" : prepared ? "변경 사항 다시 검토" : "게시 검토"}
-                </button>
-                {publishProgress ? (
-                  <div className="notice fixture" role="status">
-                    {publishProgressLabels[publishProgress]}
-                  </div>
-                ) : null}
-                {publishApproval ? (
-                  <div className="approval-panel" role="status">
+
+                {confirmDisconnect ? (
+                  <div className="disconnect-confirm" role="alert">
                     <div>
-                      <strong>게시 승인을 기다리고 있습니다.</strong>
-                      <small>
-                        {publishApproval.title} ·{" "}
-                        {new Date(publishApproval.expiresAt).toLocaleString()}
-                        까지
-                      </small>
+                      <strong>Tistory 연결을 해제할까요?</strong>
+                      <p>저장된 카카오 로그인 정보와 Tistory 세션을 이 계정에서 비웁니다.</p>
                     </div>
                     <button
                       type="button"
-                      className="approval-action"
-                      disabled={publishing}
-                      onClick={() => void approvePublish()}
+                      className="danger-action"
+                      disabled={disconnecting}
+                      onClick={() => void disconnect()}
                     >
-                      {publishing ? "게시 중…" : "내용을 확인했고 게시합니다"}
+                      {disconnecting ? "해제 중…" : "연결 해제"}
                     </button>
                     <button
                       type="button"
                       className="secondary-action"
-                      disabled={publishing}
-                      onClick={() => void cancelPublish()}
+                      disabled={disconnecting}
+                      onClick={() => setConfirmDisconnect(false)}
                     >
                       취소
                     </button>
                   </div>
-                ) : publishResult ? (
-                  <div className="publish-success" role="status">
-                    <span className="empty-mark">✓</span>
-                    <strong>Tistory 게시가 완료되었습니다.</strong>
-                    <a href={publishResult.entryUrl} target="_blank" rel="noreferrer">
-                      게시물 열기
-                    </a>
-                    <small>
-                      {publishResult.visibility === "private" ? "비공개" : "공개"} · 게시물 ID{" "}
-                      {publishResult.postId}
-                    </small>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="approval-action"
-                    disabled={!prepared || fixtureMode || publishing}
-                    onClick={() => void requestPublish()}
-                  >
-                    {fixtureMode
-                      ? "Cloud 연결 후 승인 요청"
-                      : publishing
-                        ? "승인 요청 준비 중…"
-                        : `${visibility === "private" ? "비공개" : "공개"} 게시 승인 요청`}
-                  </button>
-                )}
-                {publishError ? (
-                  <div className="notice error" role="alert">
-                    {publishError}
+                ) : null}
+
+                {!loading && (!ready || showConnectionForm) ? (
+                  <form className="connection-form" onSubmit={connect}>
+                    <div className="connection-security-note">
+                      <strong>사용자 전용 보안 저장소</strong>
+                      <p>
+                        카카오 계정은 로그인 처리 후 비우고, Tistory 세션만 현재 Identity 사용자에게
+                        매핑된 암호화 Secret Variable에 저장합니다. 게시 입력과 실행 결과에는
+                        포함하지 않습니다.
+                      </p>
+                    </div>
+                    <label className="field">
+                      <span>
+                        <strong>블로그 주소</strong>
+                      </span>
+                      <input
+                        value={blogHost}
+                        disabled={connecting}
+                        onChange={(event) => setBlogHost(event.target.value)}
+                        placeholder="example.tistory.com"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>
+                        <strong>카카오계정</strong>
+                      </span>
+                      <input
+                        value={accountId}
+                        disabled={connecting}
+                        onChange={(event) => setAccountId(event.target.value)}
+                        type="email"
+                        autoComplete="username"
+                        placeholder="카카오계정 이메일"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>
+                        <strong>비밀번호</strong>
+                      </span>
+                      <input
+                        value={password}
+                        disabled={connecting}
+                        onChange={(event) => setPassword(event.target.value)}
+                        type="password"
+                        autoComplete="current-password"
+                        placeholder="카카오계정 비밀번호"
+                        required
+                      />
+                    </label>
+                    <div className="connection-actions">
+                      <button
+                        type="submit"
+                        className="primary-action"
+                        disabled={connecting || !blogHost.trim() || !accountId.trim() || !password}
+                      >
+                        {connecting ? "연결 중…" : "카카오로 Tistory 연결"}
+                      </button>
+                      {ready ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          disabled={connecting}
+                          onClick={() => setShowConnectionForm(false)}
+                        >
+                          취소
+                        </button>
+                      ) : null}
+                    </div>
+                  </form>
+                ) : null}
+                {connectionProgress ? (
+                  <div className="notice fixture" role="status">
+                    {connectionProgressLabels[connectionProgress]}
                   </div>
                 ) : null}
-                <p className="approval-note">승인 전에는 Tistory 게시물을 만들지 않습니다.</p>
+                {connectionError ? (
+                  <div className="notice error" role="alert">
+                    {connectionError}
+                  </div>
+                ) : null}
               </section>
-            </aside>
-          </form>
+            </>
+          ) : (
+            <>
+              <header className="page-header">
+                <div>
+                  <span className="eyebrow">새 게시</span>
+                  <h1>문서를 게시합니다.</h1>
+                  <p>원문을 선택하고 게시 옵션을 확인한 뒤, 승인 요청을 만드세요.</p>
+                </div>
+                <nav className="step-summary" aria-label="게시 단계">
+                  <span className="done">1</span>
+                  <small>문서</small>
+                  <i />
+                  <span className={prepared ? "done" : "current"}>2</span>
+                  <small>검토</small>
+                  <i />
+                  <span>3</span>
+                  <small>승인</small>
+                </nav>
+              </header>
+
+              {loadError ? (
+                <div className="notice error" role="alert">
+                  {loadError}
+                </div>
+              ) : null}
+              {fixtureMode ? (
+                <div className="notice fixture" role="status">
+                  Fixture에서는 화면과 검토 상태만 확인하며 실제 게시 요청은 보내지 않습니다.
+                </div>
+              ) : null}
+
+              {!loading && !ready ? (
+                <section
+                  className="panel connection-required"
+                  aria-labelledby="connection-required-title"
+                >
+                  <div>
+                    <span className="eyebrow">연결 필요</span>
+                    <h2 id="connection-required-title">먼저 Tistory 계정을 연결하세요.</h2>
+                    <p>카카오계정 입력과 세션 관리는 새 게시가 아니라 연결 메뉴에서 수행합니다.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={() => setActiveView("connections")}
+                  >
+                    연결 메뉴로 이동
+                  </button>
+                </section>
+              ) : null}
+
+              <form className="studio-grid" onSubmit={prepare}>
+                <div className="editor-column">
+                  <section className="panel source-panel">
+                    <div className="section-heading">
+                      <div>
+                        <span className="section-number">01</span>
+                        <h2>원문</h2>
+                      </div>
+                      <fieldset className="format-switch">
+                        <legend className="sr-only">원문 형식</legend>
+                        {(["markdown", "html"] as const).map((format) => (
+                          <button
+                            key={format}
+                            type="button"
+                            className={sourceFormat === format ? "active" : ""}
+                            aria-pressed={sourceFormat === format}
+                            disabled={workflowLocked}
+                            onClick={() => {
+                              setSourceFormat(format);
+                              invalidatePrepared();
+                            }}
+                          >
+                            {format === "markdown" ? "Markdown" : "HTML"}
+                          </button>
+                        ))}
+                      </fieldset>
+                    </div>
+
+                    <label className="drop-zone">
+                      <input
+                        ref={fileInputRef}
+                        className="sr-only"
+                        type="file"
+                        disabled={workflowLocked}
+                        accept=".md,.markdown,.html,.htm,text/markdown,text/html"
+                        onChange={(event) => void chooseSource(event.target.files?.[0] ?? null)}
+                      />
+                      <span className="drop-icon">
+                        <Icon name={sourceName ? "check" : "upload"} aria-hidden="true" />
+                      </span>
+                      <span>
+                        <strong>{sourceName ?? "MD 또는 HTML 파일 선택"}</strong>
+                        <small>
+                          {sourceName ? "파일을 다시 선택할 수 있습니다." : "최대 2MB · 로컬 파일"}
+                        </small>
+                      </span>
+                    </label>
+                    {sourceError ? (
+                      <p className="field-error" role="alert">
+                        {sourceError}
+                      </p>
+                    ) : null}
+
+                    <label className="field source-field" htmlFor={sourceInputId}>
+                      <span>
+                        <strong>원문 내용</strong>
+                        <small>파일 대신 직접 붙여넣을 수도 있습니다.</small>
+                      </span>
+                      <textarea
+                        id={sourceInputId}
+                        value={sourceBody}
+                        disabled={workflowLocked}
+                        onChange={changeSource}
+                        spellCheck={false}
+                        placeholder={
+                          sourceFormat === "markdown"
+                            ? "# 제목\n\n게시할 Markdown을 입력하세요."
+                            : "<h1>제목</h1>\n<p>게시할 HTML을 입력하세요.</p>"
+                        }
+                      />
+                    </label>
+                  </section>
+
+                  <section className="panel options-panel">
+                    <div className="section-heading">
+                      <div>
+                        <span className="section-number">02</span>
+                        <h2>게시 정보</h2>
+                      </div>
+                    </div>
+                    <div className="form-grid">
+                      <label className="field wide">
+                        <span>
+                          <strong>제목</strong>
+                        </span>
+                        <input
+                          value={title}
+                          disabled={workflowLocked}
+                          maxLength={250}
+                          onChange={(event) => {
+                            setTitle(event.target.value);
+                            invalidatePrepared();
+                          }}
+                          placeholder="게시물 제목"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>
+                          <strong>카테고리</strong>
+                        </span>
+                        <select
+                          value={categoryId}
+                          disabled={workflowLocked}
+                          onChange={(event) => {
+                            setCategoryId(Number(event.target.value));
+                            invalidatePrepared();
+                          }}
+                        >
+                          {categories.map((category) => (
+                            <option key={category.id} value={category.id}>
+                              {category.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>
+                          <strong>태그</strong>
+                          <small>쉼표로 구분</small>
+                        </span>
+                        <input
+                          value={tags}
+                          disabled={workflowLocked}
+                          onChange={(event) => {
+                            setTags(event.target.value);
+                            invalidatePrepared();
+                          }}
+                          placeholder="개발, 기록"
+                        />
+                      </label>
+                      <fieldset className="field wide visibility-field">
+                        <legend>
+                          <strong>공개 범위</strong>
+                        </legend>
+                        <div className="visibility-options">
+                          {(["private", "public"] as const).map((value) => (
+                            <label key={value} className={visibility === value ? "selected" : ""}>
+                              <input
+                                type="radio"
+                                name="visibility"
+                                value={value}
+                                checked={visibility === value}
+                                disabled={workflowLocked}
+                                onChange={() => setVisibility(value)}
+                              />
+                              <span>
+                                <strong>{value === "private" ? "비공개" : "공개"}</strong>
+                                <small>
+                                  {value === "private"
+                                    ? "나만 확인할 수 있습니다."
+                                    : "승인 즉시 독자에게 공개됩니다."}
+                                </small>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <label className="field wide">
+                        <span>
+                          <strong>대표 이미지</strong>
+                          <small>선택</small>
+                        </span>
+                        <span className="file-control">
+                          <input
+                            className="sr-only"
+                            type="file"
+                            disabled={workflowLocked}
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] ?? null;
+                              setCoverFile(file);
+                              setCoverName(file?.name ?? null);
+                            }}
+                          />
+                          <span>{coverName ?? "PNG, JPG, GIF, WebP"}</span>
+                          <b>{coverName ? "변경" : "선택"}</b>
+                        </span>
+                      </label>
+                    </div>
+                  </section>
+                </div>
+
+                <aside className="review-column">
+                  <section className="panel connection-card">
+                    <div className="platform-mark">T</div>
+                    <div>
+                      <span>게시 연결</span>
+                      {ready ? (
+                        <label className="connection-select">
+                          <span className="sr-only">게시할 Tistory 연결</span>
+                          <select
+                            defaultValue="default"
+                            aria-label="게시할 Tistory 연결"
+                            disabled={workflowLocked}
+                          >
+                            <option value="default">Tistory · {connection.blogHost}</option>
+                          </select>
+                        </label>
+                      ) : (
+                        <button
+                          type="button"
+                          className="text-action"
+                          onClick={() => setActiveView("connections")}
+                        >
+                          연결 메뉴에서 Tistory 추가
+                        </button>
+                      )}
+                    </div>
+                    <span className={`connection-badge ${ready ? "ready" : ""}`}>
+                      {ready ? "준비됨" : "연결 필요"}
+                    </span>
+                  </section>
+
+                  <section className="panel review-card">
+                    <div className="section-heading">
+                      <div>
+                        <span className="section-number">03</span>
+                        <h2>게시 검토</h2>
+                      </div>
+                    </div>
+                    {prepared ? (
+                      <div className="prepared-view">
+                        <div className="preview-frame">
+                          <iframe
+                            title="정화된 게시 미리보기"
+                            sandbox=""
+                            srcDoc={previewDocument(prepared.renderedHtml)}
+                          />
+                        </div>
+                        <dl className="review-list">
+                          <div>
+                            <dt>형식</dt>
+                            <dd>{prepared.content.format === "markdown" ? "Markdown" : "HTML"}</dd>
+                          </div>
+                          <div>
+                            <dt>공개</dt>
+                            <dd>{visibility === "private" ? "비공개" : "공개"}</dd>
+                          </div>
+                          <div>
+                            <dt>태그</dt>
+                            <dd>{prepared.tags.length || "없음"}</dd>
+                          </div>
+                          <div>
+                            <dt>대표 이미지</dt>
+                            <dd>{coverName ?? "없음"}</dd>
+                          </div>
+                        </dl>
+                        <div className="hash-row">
+                          <span>승인 기준</span>
+                          <code>{prepared.draftHash.slice(0, 20)}…</code>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="empty-review">
+                        <span className="empty-mark">P</span>
+                        <strong>아직 검토할 문서가 없습니다.</strong>
+                        <p>원문과 제목을 입력한 뒤 게시 검토를 준비하세요.</p>
+                      </div>
+                    )}
+                    {prepareError ? (
+                      <div className="notice error" role="alert">
+                        {prepareError}
+                      </div>
+                    ) : null}
+                    <button
+                      type="submit"
+                      className="primary-action"
+                      disabled={!canPrepare || workflowLocked}
+                    >
+                      {preparing ? "검토 준비 중…" : prepared ? "변경 사항 다시 검토" : "게시 검토"}
+                    </button>
+                    {publishProgress ? (
+                      <div className="notice fixture" role="status">
+                        {publishProgressLabels[publishProgress]}
+                      </div>
+                    ) : null}
+                    {publishApproval ? (
+                      <div className="approval-panel" role="status">
+                        <div>
+                          <strong>게시 승인을 기다리고 있습니다.</strong>
+                          <small>
+                            {publishApproval.title} ·{" "}
+                            {new Date(publishApproval.expiresAt).toLocaleString()}
+                            까지
+                          </small>
+                        </div>
+                        <button
+                          type="button"
+                          className="approval-action"
+                          disabled={publishing}
+                          onClick={() => void approvePublish()}
+                        >
+                          {publishing ? "게시 중…" : "내용을 확인했고 게시합니다"}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          disabled={publishing}
+                          onClick={() => void cancelPublish()}
+                        >
+                          취소
+                        </button>
+                      </div>
+                    ) : publishResult ? (
+                      <div className="publish-success" role="status">
+                        <span className="empty-mark">✓</span>
+                        <strong>Tistory 게시가 완료되었습니다.</strong>
+                        <a href={publishResult.entryUrl} target="_blank" rel="noreferrer">
+                          게시물 열기
+                        </a>
+                        <small>
+                          {publishResult.visibility === "private" ? "비공개" : "공개"} · 게시물 ID{" "}
+                          {publishResult.postId}
+                        </small>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="approval-action"
+                        disabled={!prepared || fixtureMode || publishing}
+                        onClick={() => void requestPublish()}
+                      >
+                        {fixtureMode
+                          ? "Cloud 연결 후 승인 요청"
+                          : publishing
+                            ? "승인 요청 준비 중…"
+                            : `${visibility === "private" ? "비공개" : "공개"} 게시 승인 요청`}
+                      </button>
+                    )}
+                    {publishError ? (
+                      <div className="notice error" role="alert">
+                        {publishError}
+                      </div>
+                    ) : null}
+                    <p className="approval-note">승인 전에는 Tistory 게시물을 만들지 않습니다.</p>
+                  </section>
+                </aside>
+              </form>
+            </>
+          )}
         </main>
       </div>
     </div>

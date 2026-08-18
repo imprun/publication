@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   createExampleDraft,
   credentialVariableRequests,
-  loginInputConfigRequest,
   loginRunInput,
   parseCredentialsEnv,
   parseCredentialsJson,
@@ -29,20 +28,12 @@ describe("Tistory login E2E CLI contract", () => {
     });
   });
 
-  it("provisions credentials as app-scoped Secret Variables", () => {
+  it("provisions credentials as actor-scoped Secret Variables", () => {
     const variables = credentialVariableRequests({ accountId: "user", password: "secret" });
     expect(variables).toMatchObject([
-      { app_key: "publication", is_secret: true, value: "user" },
-      { app_key: "publication", is_secret: true, value: "secret" },
+      { app_key: "publication", is_secret: true, scope: "actor", value: "user" },
+      { app_key: "publication", is_secret: true, scope: "actor", value: "secret" },
     ]);
-    expect(loginInputConfigRequest()).toEqual({
-      action_key: "connection.login",
-      config: {
-        accountId: "$var@app:connections/tistory/default/account-id",
-        password: "$var@app:connections/tistory/default/password",
-      },
-      locked_keys: ["accountId", "password"],
-    });
   });
 
   it("keeps credentials out of the persisted Run input", () => {

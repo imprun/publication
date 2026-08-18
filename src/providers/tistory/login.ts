@@ -18,6 +18,7 @@ export interface TistoryLoginResult {
   publicUrl: string;
   capturedAt: string;
   authenticated: true;
+  status: "ready";
 }
 
 const KAKAO_AUTHENTICATION_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -166,9 +167,11 @@ async function performLogin(
 
   await ctx.variables.set(TISTORY_SESSION_PATH, JSON.stringify(secret), {
     operationId: randomUUID(),
+    scope: "actor",
   });
   await ctx.resources.set(TISTORY_PROFILE_PATH, profile, TISTORY_CONNECTION_RESOURCE_TYPE, {
     operationId: randomUUID(),
+    scope: "actor",
   });
   return {
     provider: "tistory",
@@ -177,6 +180,7 @@ async function performLogin(
     publicUrl: profile.publicUrl,
     capturedAt,
     authenticated: true,
+    status: "ready",
   };
 }
 
