@@ -7,8 +7,9 @@ held for explicit approval.
 
 ## Backend flow
 
-1. `connection.login` connects Puppeteer to the Job-scoped `edge-cdp` capability
-   and creates an isolated BrowserContext. Browser Edge is used only as an
+1. `connection.login` requires exactly one assigned Job-scoped Browser capability:
+   `edge-cdp/v1` or `managed-local/v1`. It never chooses between two providers or
+   falls back automatically. Puppeteer creates an isolated BrowserContext and the provider is used only as an
    origin-aware JavaScript runtime and cookie/storage jar. It starts the Tistory
    OAuth transaction with `Kakao.Auth.authorize()`, then calls the Kakao Account
    page's loaded client for `authenticate` and one-second phone-approval polling.
@@ -122,12 +123,16 @@ KAKAO_LOGINPWD=your-kakao-password
 npm run e2e:tistory-login -- --context my-cloud --blog-host example-blog.tistory.com --env .env
 ```
 
-Complete Kakao's own CAPTCHA in the Browser Edge tab if it appears. If Kakao then
+Complete Kakao's own CAPTCHA in the Browser Edge tab if it appears. Managed-local
+has no visual interaction channel, so a run that requires CAPTCHA must fail rather
+than silently change providers. If Kakao then
 sends a phone approval request, approve it on the registered device; the action
 checks the page-owned verification state every second. After login, the
 CLI creates a private post approval task in Imprun Cloud and waits for the user to
 approve it. Use `--markdown <path>` to replace the example Markdown, or
-`--configure-only` to rotate the Secret Variables without starting a Run. Remove
+`--login-status-only` to stop after the non-mutating login and status check without
+preparing or publishing a post. Use `--configure-only` to rotate the Secret Variables
+without starting a Run. The two stop modes cannot be combined. Remove
 the plaintext credential file after provisioning or keep it in an external
 secret manager; Publication never deletes user files.
 

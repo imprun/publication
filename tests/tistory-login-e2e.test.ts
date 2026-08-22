@@ -3,6 +3,7 @@ import {
   createExampleDraft,
   credentialVariableRequests,
   loginRunInput,
+  parseArgs,
   parseCredentialsEnv,
   parseCredentialsJson,
   privatePublishInput,
@@ -40,6 +41,32 @@ describe("Tistory login E2E CLI contract", () => {
     expect(loginRunInput("https://example-blog.tistory.com/manage")).toEqual({
       blogHost: "example-blog.tistory.com",
     });
+  });
+
+  it("provides an explicit login/status-only boundary that cannot be combined with configure-only", () => {
+    expect(
+      parseArgs([
+        "--context",
+        "imprun",
+        "--blog-host",
+        "example.tistory.com",
+        "--credentials",
+        "credentials.json",
+        "--login-status-only",
+      ]),
+    ).toMatchObject({ loginStatusOnly: true, configureOnly: false });
+    expect(() =>
+      parseArgs([
+        "--context",
+        "imprun",
+        "--blog-host",
+        "example.tistory.com",
+        "--credentials",
+        "credentials.json",
+        "--configure-only",
+        "--login-status-only",
+      ]),
+    ).toThrow("mutually exclusive");
   });
 
   it("builds a unique private publish input from example Markdown", () => {
