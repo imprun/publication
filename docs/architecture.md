@@ -73,8 +73,12 @@ Tistory callback. Browser isolation supplies the origin security model, current
 CSRF/encryption/user-agent context, and the cookie/storage jar. The adapter uses
 the page-loaded Kakao Account client for authentication and verification polling,
 plus top-level origin navigation. It does not query, fill, click, or submit login
-controls. A Kakao-issued dKaptcha challenge is rendered with Kakao's own widget
-and completed by the user in Browser Edge. No separate login HumanTask completion
+controls. The action accepts exactly one assigned `edge-cdp/v1` or
+`managed-local/v1` capability and fails on missing or ambiguous assignment; it
+does not implement provider fallback. A Kakao-issued dKaptcha challenge is rendered
+with Kakao's own widget and can be completed only with a visual Browser Edge session.
+Managed-local has no display/HITL channel and must fail if the flow requires visual
+interaction. No separate login HumanTask completion
 signal is used. Session state is persisted only after the read-only Tistory
 management API succeeds.
 

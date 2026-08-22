@@ -27,12 +27,13 @@ export interface ExampleDraft {
   categoryId: number;
 }
 
-interface CliOptions {
+export interface CliOptions {
   context: string;
   blogHost: string;
   credentialsSource: { kind: "json"; path: string } | { kind: "env"; path: string };
   markdownPath: string;
   configureOnly: boolean;
+  loginStatusOnly: boolean;
 }
 
 interface RunView {
@@ -152,13 +153,18 @@ export function privatePublishInput(draft: ExampleDraft, draftHash: string) {
   return { ...draft, draftHash, visibility: "private" as const };
 }
 
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   const values = new Map<string, string>();
   let configureOnly = false;
+  let loginStatusOnly = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--configure-only") {
       configureOnly = true;
+      continue;
+    }
+    if (argument === "--login-status-only") {
+      loginStatusOnly = true;
       continue;
     }
     if (
@@ -181,8 +187,11 @@ function parseArgs(argv: string[]): CliOptions {
   const envPath = values.get("--env");
   if (!context || !blogHost || Boolean(credentialsPath) === Boolean(envPath)) {
     throw new Error(
-      "usage: npm run e2e:tistory-login -- --context <name> --blog-host <host> (--credentials <json-file> | --env <env-file>) [--markdown <md-file>] [--configure-only]",
+      "usage: npm run e2e:tistory-login -- --context <name> --blog-host <host> (--credentials <json-file> | --env <env-file>) [--markdown <md-file>] [--configure-only | --login-status-only]",
     );
+  }
+  if (configureOnly && loginStatusOnly) {
+    throw new Error("--configure-only and --login-status-only are mutually exclusive");
   }
   const credentialsSource = credentialsPath
     ? ({ kind: "json", path: credentialsPath } as const)
@@ -193,6 +202,7 @@ function parseArgs(argv: string[]): CliOptions {
     credentialsSource,
     markdownPath: values.get("--markdown") ?? DEFAULT_MARKDOWN_PATH,
     configureOnly,
+    loginStatusOnly,
   };
 }
 
@@ -341,11 +351,8 @@ async function main() {
   console.log("Run input contains only blogHost.");
   if (options.configureOnly) return;
 
-  const markdown = await readFile(options.markdownPath, "utf8");
-  const draft = createExampleDraft(markdown);
-
   console.log(
-    "Starting connection.login. Complete Kakao CAPTCHA in Browser Edge if shown, approve the device notification, then approve Tistory OAuth in Browser Edge if shown.",
+    "Starting connection.login with the assigned Browser provider. Approve any Kakao device notification. Visual CAPTCHA requires a headful Edge provider and is not supported by managed-local.",
   );
   const login = await runAction<ConnectionResult>(
     options.context,
@@ -360,6 +367,26 @@ async function main() {
     2 * 60 * 1000,
   );
   if (!status.result.authenticated) throw new Error("stored Tistory session is not authenticated");
+
+  if (options.loginStatusOnly) {
+    console.log(
+      JSON.stringify(
+        {
+          loginRunId: login.run.run_id,
+          statusRunId: status.run.run_id,
+          blogHost: status.result.blogHost,
+          authenticated: status.result.authenticated,
+          mutation: "none",
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  const markdown = await readFile(options.markdownPath, "utf8");
+  const draft = createExampleDraft(markdown);
 
   const prepared = await runAction<PrepareResult>(
     options.context,

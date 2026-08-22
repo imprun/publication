@@ -38,6 +38,21 @@ const TISTORY_LOGIN_URL = "https://www.tistory.com/auth/login";
 const TISTORY_KAKAO_AUTH_STATE_ENDPOINT = "/api/v1/login/kakaoAuthState";
 const TARGET_CLEANUP_TIMEOUT_MS = 5_000;
 const TARGET_CLEANUP_POLL_INTERVAL_MS = 50;
+const BROWSER_SESSION_PROVIDERS = [
+  { capability: "managed-local/v1", endpoint: "managed-local" },
+  { capability: "edge-cdp/v1", endpoint: "edge-cdp" },
+] as const;
+
+function assignedBrowserSession(ctx: WindforceContext) {
+  const assigned = BROWSER_SESSION_PROVIDERS.filter(({ capability }) =>
+    ctx.capabilities?.has(capability),
+  );
+  const provider = assigned[0];
+  if (assigned.length !== 1 || !provider || !ctx.capabilities) {
+    throw new Error("Tistory login requires exactly one assigned BrowserSession provider");
+  }
+  return { capabilities: ctx.capabilities, provider };
+}
 
 export async function loginToTistory(input: ConnectionLoginInput, ctx: WindforceContext) {
   const host = normalizeTistoryHost(input.blogHost);
@@ -47,13 +62,13 @@ export async function loginToTistory(input: ConnectionLoginInput, ctx: Windforce
   if (!accountId || !password) {
     throw new Error("Tistory login requires accountId and password inputs");
   }
-  if (!ctx.capabilities?.has("edge-cdp/v1")) {
-    throw new Error("Tistory login requires an assigned edge-cdp BrowserSession");
-  }
+  const browserSession = assignedBrowserSession(ctx);
   const { default: puppeteer } = await loadPuppeteer();
   const browser = await puppeteer.connect({
-    browserWSEndpoint: ctx.capabilities.webSocketEndpoint("edge-cdp"),
-    headers: { ...ctx.capabilities.headers },
+    browserWSEndpoint: browserSession.capabilities.webSocketEndpoint(
+      browserSession.provider.endpoint,
+    ),
+    headers: { ...browserSession.capabilities.headers },
     protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
   });
   let isolatedContext: BrowserContext | undefined;

@@ -31,7 +31,12 @@ type LoginOutcome =
   | "sdk-unavailable"
   | "auth-state-failure";
 
-function createBrowserHarness(outcome: LoginOutcome) {
+type BrowserSessionProvider = "edge-cdp" | "managed-local";
+
+function createBrowserHarness(
+  outcome: LoginOutcome,
+  provider: BrowserSessionProvider = "edge-cdp",
+) {
   let currentURL = "about:blank";
   let authenticated = false;
   let rootClosed = false;
@@ -194,11 +199,11 @@ function createBrowserHarness(outcome: LoginOutcome) {
   ctx.variables.set = setVariable;
   ctx.resources.set = setResource;
   ctx.capabilities = {
-    available: ["edge-cdp/v1"],
+    available: [`${provider}/v1`],
     headers: { Authorization: "Bearer job-scoped-fixture" },
-    has: (capability) => capability === "edge-cdp/v1",
-    endpoint: () => "http://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
-    webSocketEndpoint: () => "ws://127.0.0.1:18092/v1/runs/run-fixture/edge-cdp",
+    has: (capability) => capability === `${provider}/v1`,
+    endpoint: () => `http://127.0.0.1:18092/v1/runs/run-fixture/${provider}`,
+    webSocketEndpoint: () => `ws://127.0.0.1:18092/v1/runs/run-fixture/${provider}`,
   };
   const humanWait = vi.fn(async () => {
     throw new Error("HumanTask must not be used for browser-observable authentication");
@@ -230,7 +235,7 @@ function expectOwnedPagesCleaned(harness: ReturnType<typeof createBrowserHarness
   expect(browserMocks.disconnect).toHaveBeenCalledOnce();
 }
 
-describe("Tistory Browser Edge login", () => {
+describe("Tistory assigned Browser provider login", () => {
   beforeEach(() => {
     browserMocks.connect.mockReset();
     browserMocks.disconnect.mockClear();
@@ -240,10 +245,42 @@ describe("Tistory Browser Edge login", () => {
     vi.useRealTimers();
   });
 
-  it("fails closed before loading Puppeteer when no edge-cdp run is assigned", async () => {
+  it("fails closed before loading Puppeteer when no Browser provider is assigned", async () => {
     const ctx = mockContext(fetch);
     await expect(loginToTistory(input, ctx)).rejects.toThrow(
-      "requires an assigned edge-cdp BrowserSession",
+      "requires exactly one assigned BrowserSession provider",
+    );
+    expect(browserMocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("uses the managed-local endpoint when that is the only assigned provider", async () => {
+    const harness = createBrowserHarness("automatic-success", "managed-local");
+    await expect(loginToTistory(input, harness.ctx)).resolves.toMatchObject({
+      authenticated: true,
+    });
+    expect(browserMocks.connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserWSEndpoint: "ws://127.0.0.1:18092/v1/runs/run-fixture/managed-local",
+      }),
+    );
+    expectOwnedPagesCleaned(harness);
+  });
+
+  it("fails closed instead of choosing a provider when both are assigned", async () => {
+    const ctx = mockContext(fetch);
+    ctx.capabilities = {
+      available: ["edge-cdp/v1", "managed-local/v1"],
+      headers: { Authorization: "Bearer job-scoped-fixture" },
+      has: (capability) => capability === "edge-cdp/v1" || capability === "managed-local/v1",
+      endpoint: () => {
+        throw new Error("must not select a provider");
+      },
+      webSocketEndpoint: () => {
+        throw new Error("must not select a provider");
+      },
+    };
+    await expect(loginToTistory(input, ctx)).rejects.toThrow(
+      "requires exactly one assigned BrowserSession provider",
     );
     expect(browserMocks.connect).not.toHaveBeenCalled();
   });
